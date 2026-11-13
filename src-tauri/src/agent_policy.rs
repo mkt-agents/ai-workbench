@@ -337,6 +337,8 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
             "grep",
             "symbols",
             "lsp",
+            // 只读 git：完整 diff / 历史 / blame（文档任务靠它看全貌）
+            "git_read",
             "run_command",
             // 文档 / 表格：只读，非代码任务的主力
             "read_document",

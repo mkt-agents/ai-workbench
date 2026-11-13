@@ -22,12 +22,22 @@ function within(root, target) {
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
+// 内置只读 git MCP 的工具（参数由服务自身校验：只读子命令、仓库内路径、输出截断）。
+// 允许它们不等于放开命令：这些工具只会执行 git log/diff/show/blame/status/names。
+const GIT_TOOLS = ['git_log', 'git_diff', 'git_show', 'git_blame', 'git_status', 'git_names'];
+
+function isGitTool(name) {
+  return GIT_TOOLS.some((tool) => name === tool || name.endsWith(`__${tool}`));
+}
+
 export function apply(ctx, config) {
   const root = fs.realpathSync(config.workspace);
   const doc = realTarget(path.join(root, config.docDir));
   if (!within(root, doc)) throw new Error('Document directory must be inside isolated workspace');
   ctx.tools.guard((execution) => {
     const args = execution.arguments ?? {};
+    // 只读 git：让模型自己看完整变更（服务只暴露只读子命令，见 docgen_git_mcp.mjs）。
+    if (isGitTool(execution.name)) return;
     if (['read', 'glob', 'grep'].includes(execution.name)) {
       const requested = execution.name === 'read' ? args.file_path : (args.path ?? '.');
       if (typeof requested !== 'string') return 'Missing read path';

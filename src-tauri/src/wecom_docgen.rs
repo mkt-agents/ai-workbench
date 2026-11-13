@@ -37,7 +37,10 @@ const MAX_FILES_PER_BATCH: usize = 100;
 const RESPLIT_MIN_FILES: usize = 20;
 /// 质检提示里变更文件列表上限，避免把整仓清单塞进上下文。
 const QUALITY_FILE_LIST_CAP: usize = 200;
-const DIFF_CHAR_CAP: usize = 24_000;
+/// diff 摘录上限：只留「够小改动零工具也能写」的量；大改动由模型用 git_read 自查。
+const DIFF_CHAR_CAP: usize = 6_000;
+/// 注入提示词的技能正文段上限（技能本身已按 `SKILL_CAP` 截断，这里再兜一层）。
+const DOC_SKILL_SECTION_CAP: usize = 8_000;
 const HISTORY_CAP: usize = 30;
 const LOG_LINE_CAP: usize = 30;
 
@@ -167,6 +170,18 @@ pub struct DocgenConfig {
     /// 质检 system 提示词模板；空=内置默认。
     #[serde(default)]
     pub quality_prompt: String,
+    /// 注入更新提示词的技能名（项目 `.ai-workbench/skills` 或全局同名格式）；空=不注入。
+    #[serde(default)]
+    pub doc_skill: String,
+    /// 文档轮次是否启用 MCP 工具（默认关；无人值守，必须显式开启）。
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    /// 放开给文档轮次的 MCP 服务（服务级白名单；未列出的服务不会列工具）。
+    #[serde(default)]
+    pub mcp_specs: Vec<crate::mcp::McpServerSpec>,
+    /// 文档轮次是否放开只读 git / LSP 工具（默认开；关掉回到旧的只读文件工具集）。
+    #[serde(default = "default_true")]
+    pub git_tools: bool,
     /// 跑更新用哪个引擎：`tianji` | `dsh`（apply 时已把 `inherit` 解析成具体值）。
     #[serde(default)]
     pub engine: String,
@@ -207,6 +222,10 @@ impl Default for DocgenConfig {
             repo_allowlist: Vec::new(),
             system_prompt: String::new(),
             quality_prompt: String::new(),
+            doc_skill: String::new(),
+            mcp_enabled: false,
+            mcp_specs: Vec::new(),
+            git_tools: true,
             engine: "tianji".into(),
             tianji_agent: None,
         }
@@ -226,58 +245,77 @@ pub fn normalize_prompt_template(raw: &str) -> String {
 }
 
 pub fn default_docgen_system_prompt() -> &'static str {
-    "你是代码逆向文档维护助手。工作区是一个代码仓库，有两类文档产物：\n\
-- `{doc_dir}/`：按模块沉淀的逆向工程说明书（长期知识）\n\
-- `{updates_dir}/{date}.md`：按日沉淀的「今天改了哪些功能」（面向人读的变更日志）\n\
-当前在 release 分支「{branch}」，今日日期 `{date}`。\n\n\
-## 提交摘要\n\
-{commits}\n\n\
-## 变更文件\n\
-{files}\n\n\
-## 变更 diff 摘录（定向线索；完整内容请用工具读文件）\n\
-{diff}\n{mapping}\n\n\
-任务：阅读这些变更涉及的代码，完成两类产物。\n\
-一、更新 `{doc_dir}/` 下**对应**的逆向文档，使其与最新代码一致。\n\
-如何找对应文档（按顺序尝试）：\n\
-- 先在 `{doc_dir}/` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；\n\
-- 文件名/模块名找不到时，按业务功能关键词再搜一次；\n\
-- 仍找不到且该变更重要时，才在 `{doc_dir}/` 下新建一篇，文件名贴合模块（不要建在 updates/ 下）。\n\
-证据与写法：\n\
-- diff 只是线索；改文档前必须用工具读现行源码与目标 md；只写读到的行为，禁止补未证实的架构或流程。\n\
-- 新建或大段改写时尽量覆盖：职责、关键入口与调用链、核心类型或表、边界与错误；已有文档保持原结构，只改过时处，删掉与代码不符的段落，不堆砌无关背景。\n\
-- 删除或重命名：同步改文档或标明已移除；纯格式/依赖噪音且无行为变化 → 模块文档可跳过，日报记「无行为变更」。\n\
-二、追加当日功能更新：打开或新建 `{updates_dir}/{date}.md`，在文末追加一节（不要整文件覆盖）。\n\
-节标题示例：`## HH:MM · {branch}`；正文用条目列出本批涉及的功能点与触及的文档名（用人话，如「订单结算」「文档中心门户」）。只写本批出现的变更，禁止编造未出现的模块。\n\
-硬规则：\n\
-1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**（含 `{updates_dir}/`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。\n\
-2. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。\n\
-3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。\n\
-4. 本批只改**直接相关**文档与当日 updates 追加节；不要通读全库文档。\n\
-5. 优先完成摘要与落盘，控制工具往返；无关文件跳过并在摘要说明。\n\
-6. 收尾先写 3–6 条**面向业务**的中文要点（改了什么能力、对谁有影响、更新了哪几篇文档）；禁止行号、函数/符号名、JSON 字段、commit hash、工具过程（grep/读文件等）。另起「## 代码引用」，每行一条且必须用箭头（**仅供系统映射落库，不要写进业务摘要正文**；群通知会自动省略该节）：\n\
-   - `源码路径:符号` → `文档相对路径`"
+    r#"本次更新：逆向文档同步 · 分支 {branch} · {date} · 本批 {file_count} 个文件
+（索引见下；完整 diff、提交语义与历史用只读 git 工具自查）
+
+你是代码逆向文档维护助手。工作区是一个代码仓库，有两类文档产物：
+- `{doc_dir}/`：按模块沉淀的逆向工程说明书（长期知识）
+- `{updates_dir}/{date}.md`：按日沉淀的「今天改了哪些功能」（面向人读的变更日志）
+当前在 release 分支「{branch}」，今日日期 `{date}`。
+
+{index}{mapping}
+
+工作流程（严格按顺序）：
+第一步·规划：把「本批文件」逐个归类，先写出「文件 → 目标文档」清单（可用 update_plan 展示）：
+- 按变更文件的路径层级推断归属模块（如 `service/order/`、`controller/quote/`），优先匹配 `{doc_dir}/` 下同名或同层级的文档与子目录；
+- 用 grep / symbols 验证：拿变更文件名、所在目录名、新增/改动的类名与方法名去搜，命中的才算找到；
+- 同一模块的多个文件合并到同一篇文档，不要一个文件一篇文档；
+- 找不到对应文档且该变更重要（新增能力 / 行为变化）时才新建一篇，文件名贴合模块目录名（不要建在 updates/ 下）。
+第二步·调查（写任何文档之前必须做，否则视为未完成）：
+- 看本轮完整变更：天玑用 `git_read`（先 `{"sub":"log","args":"-5 --oneline"}` 找到范围，再 `{"sub":"diff","args":"-p <旧提交>..HEAD -- <路径>"}`）；Harness 用 `git_log` / `git_diff`（如 `{"range":"<旧提交>..HEAD","path":"src/order"}`）；必要时 `show` / `blame`；
+- 索引只有采集区间与本批文件，可能不完整：提交语义、完整 diff、历史都要自己查，禁止只按文件名猜内容；
+- 用 read_file / grep / symbols / lsp 读透相关源码：入口、调用链、校验与错误分支、边界条件；
+- 只写读到的行为，禁止补未证实的架构或流程。
+第三步·写作：
+一、模块文档（`{doc_dir}/`）——写「行为」不写「动作」：
+- 讲清本批变更改变了什么业务行为——新增/修改/废弃了什么能力、入口在哪、调用链怎么走、有哪些校验、边界条件和错误处理；禁止把 commit 标题或 diff 片段原样抄进文档。
+- 已有文档：保持原结构，只改与代码不符的段落，在对应章节里就地更新；禁止重写全文、禁止堆砌项目背景和无关介绍。
+- 新建文档：覆盖职责、关键入口与调用链、核心类型或表、边界与错误四块；不写空泛的「概述 / 总结」套话。
+- 删除或重命名：同步改文档或标明已移除；纯格式/依赖噪音且无行为变化 → 模块文档跳过，日报记「无行为变更」。
+二、当日更新（`{updates_dir}/{date}.md`）：
+- 打开或新建，在文末追加一节（不要整文件覆盖）；节标题：`## HH:MM · {branch}`。
+- 正文用条目列出本批功能点（用人话，如「订单结算」「文档中心门户」），并注明各点更新了哪篇文档；只写本批出现的变更，禁止编造未出现的模块。
+第四步·收尾（必须输出）：
+1) 3–6 条**面向业务**的中文要点，每条一句话（改了什么能力、影响谁、更新了哪篇文档）；禁止行号、函数/符号名、JSON 字段、commit hash、工具过程，禁止背景铺垫和复述。
+2) 「## 代码引用」每行一条且必须用箭头（**仅供系统映射落库，不要写进业务摘要正文**；群通知会自动省略该节）：`源码路径:符号` → `文档相对路径`
+3) 「## 覆盖」每行一条，覆盖清单里的每个业务文件：`源码路径` → `文档相对路径`，或 `源码路径` → `跳过：原因`
+4) 摘要只写业务要点：不要写批次号、文件数量、落盘/保存过程，也不要贴代码路径（群通知会原文展示这些文字）。
+
+硬规则：
+1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**（含 `{updates_dir}/`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。
+2. 不要删除或移动文件；不要运行命令（只读 git 用 git_read / git_log 等工具），只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。
+3. 本批只改规划清单里的文档与当日 updates 追加节；不要通读全库文档。
+4. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。
+5. 控制工具往返：无关文件跳过并在摘要说明；优先完成落盘。"#
 }
 
 pub fn default_docgen_quality_prompt() -> &'static str {
-    "你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 `{doc_dir}/`，今日 `{date}`。\n\
-本轮更新摘要：\n\
-{summary}\n\n\
-本次代码变更文件：\n\
-{files}\n\n\
-任务：只审**本轮更新**。优先根据摘要与文件列表下结论；需要时最多抽查 3 个相关文档（含当日 `{updates_dir}/{date}.md` 相关节）核对源码。用 3–8 条中文结论；禁止只复述摘要，禁止广搜或通读 `{doc_dir}/`，禁止把整库历史欠账当本轮事故。\n\
-范围：\n\
-- 只核对本轮改动触及的文档与源码；\n\
-- 历史欠账、无关模块、总索引陈旧 → 一律 `[建议]`；\n\
-- 吃不准就不要 `[阻断]`；超时前必须先给出结论列表。\n\
-`[阻断]` 仅限（须同时满足「本轮新写/新改内容」）：\n\
-- 与本轮 `{files}` 源码直接矛盾；\n\
-- 引用了本轮文件中不存在的符号；\n\
-- 日报编造了本轮未出现的模块。\n\
-输出格式（每条单独一行）：\n\
-- `[阻断] …`；\n\
-- `[建议] …`；\n\
-- 无本轮硬伤写：`未发现过时或矛盾`。\n\
-硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。"
+    r#"你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 `{doc_dir}/`，今日 `{date}`。
+本轮更新摘要：
+{summary}
+
+本轮覆盖台账（模型自报；缺行不等于没做，但要点名核对）：
+{coverage}
+
+本次代码变更文件：
+{files}
+
+任务：只审**本轮更新**。优先根据摘要、台账与文件列表下结论；需要时最多抽查 3 个相关文档（含当日 `{updates_dir}/{date}.md` 相关节）核对源码，可用只读 git 工具（`git_read` 或 `git_log` / `git_diff` 等）看本轮完整 diff / 历史。用 3–8 条中文结论；禁止只复述摘要，禁止广搜或通读 `{doc_dir}/`，禁止把整库历史欠账当本轮事故。
+范围（逐项核对）：
+- 覆盖：本轮 `{files}` 里的业务文件是否都在摘要与台账里有着落（更新了哪篇，或写明跳过原因）；完全没着落的要点名缺哪些；
+- 深度：本轮新写的内容是否讲清了业务行为、调用链与边界，还是只复述了 commit 标题式的一句话；
+- 矛盾：新写的描述与现行源码是否一致；
+- 历史欠账、无关模块、总索引陈旧 → 一律 `[建议]`；
+- 吃不准就不要 `[阻断]`；超时前必须先给出结论列表。
+`[阻断]` 仅限（须同时满足「本轮新写/新改内容」）：
+- 与本轮 `{files}` 源码直接矛盾；
+- 引用了本轮文件中不存在的符号；
+- 日报编造了本轮未出现的模块。
+输出格式（每条单独一行）：
+- `[阻断] …`；
+- `[建议] …`；
+- 无本轮硬伤写：`未发现过时或矛盾`。
+硬规则：只读文件/搜索/只读 git（git_read 或 git_log / git_diff 等），禁止写文件、改文件、跑命令、删除。"#
 }
 
 /// `{doc_dir}/updates`（正斜杠相对路径）。
@@ -476,6 +514,18 @@ fn normalize_doc_dir(workspace: &str, doc_dir: &str) -> Result<String, String> {
         return Ok("doc".into());
     }
     Ok(rel)
+}
+
+/// 保存配置时的前置校验：文档目录必须能归一到工作区内（纯字符串判断，无 IO）。
+///
+/// 这条矛盾目前要等调度真正跑到 workspace 阶段才报「文档目录必须位于工作区内」，
+/// 自动更新会静默失败一整天；在 `wecom_docgen_apply` 保存时提前拦下，
+/// 让用户在页面上当场看到错误。任一项为空则不拦（空值由运行时兜底解析）。
+pub fn validate_config_paths(workspace: &str, doc_dir: &str) -> Result<(), String> {
+    if workspace.trim().is_empty() || doc_dir.trim().is_empty() {
+        return Ok(());
+    }
+    normalize_doc_dir(workspace, doc_dir).map(|_| ())
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -711,6 +761,9 @@ pub struct DocgenHistoryItem {
     pub quality: String,
     #[serde(default)]
     pub quality_blocking: usize,
+    /// 模型自报的覆盖台账（截断）；老记录没有该字段。
+    #[serde(default)]
+    pub coverage: String,
     pub pushed: bool,
     /// Git 本地提交 / 远端推送 / 群通知分别成功与否；`None` = 未执行。
     #[serde(default)]
@@ -793,6 +846,7 @@ fn history_from_report(
         commit_note: report.commit_note.clone(),
         quality: truncate_chars(quality, 800),
         quality_blocking: report.quality_blocking,
+        coverage: truncate_chars(&report.coverage, 2000),
         pushed: report.pushed,
         commit_status: Some(report.commit_status.clone()),
         push_status: Some(report.push_status.clone()),
@@ -906,6 +960,7 @@ async fn auto_tick_one(app: &AppHandle, bot: &BotRuntime, cfg: &DocgenConfig) ->
                     commit_note: String::new(),
                     quality: String::new(),
                     quality_blocking: 0,
+                    coverage: String::new(),
                     pushed,
                     commit_status: Some("not-run".into()),
                     push_status: Some("not-run".into()),
@@ -1110,6 +1165,7 @@ async fn maybe_poll_release(
                 commit_note: String::new(),
                 quality: String::new(),
                     quality_blocking: 0,
+                coverage: String::new(),
                 pushed,
                 commit_status: Some("not-run".into()),
                 push_status: Some("not-run".into()),
@@ -1139,6 +1195,8 @@ pub struct UpdateReport {
     pub preview: bool,
     pub quality: String,
     pub quality_blocking: usize,
+    /// 模型自报的覆盖台账（`## 覆盖` 小节原文）：喂质检、落历史。
+    pub coverage: String,
     pub webhook_errors: Vec<String>,
     /// 更新 / 质检步骤的失败原因（空 = 成功）。有值时：算失败、不提交、不推进游标。
     pub error: String,
@@ -1444,6 +1502,7 @@ async fn run_update_inner(
             preview,
             quality: String::new(),
                     quality_blocking: 0,
+            coverage: String::new(),
             webhook_errors: errs,
             error: String::new(),
         };
@@ -1479,7 +1538,8 @@ async fn run_update_inner(
                     branch, new_commits: 0, changed_files: pending.changed_files,
                     updated_docs: pending.summary, references: Vec::new(), commit_note: summary, pushed,
                     commit_status: "reused".into(), push_status: if error.is_empty() { "ok".into() } else { "fail".into() },
-                    skipped_reason: None, preview: false, quality: String::new(), quality_blocking: 0, webhook_errors, error,
+                    skipped_reason: None, preview: false, quality: String::new(), quality_blocking: 0,
+                    coverage: String::new(), webhook_errors, error,
                 };
                 append_history(&history_from_report(trigger, &report, "", &report.webhook_errors, progress.elapsed_ms()));
                 return Ok(report);
@@ -1618,6 +1678,7 @@ async fn run_update_inner(
             preview,
             quality: String::new(),
                     quality_blocking: 0,
+            coverage: String::new(),
             webhook_errors: webhook_errors.clone(),
             error: String::new(),
         };
@@ -1633,6 +1694,8 @@ async fn run_update_inner(
 
     require_running()?;
     let batch_total = batches.len().max(1);
+    // 技能正文每轮只加载一次（读目录 + 正文），批次之间复用；未选技能时是 None。
+    let skill_section = doc_skill_section(&execution_workspace, &cfg.doc_skill);
     let mut step_error = String::new();
     let mut batch_errors: Vec<String> = Vec::new();
     let mut updated_docs = String::new();
@@ -1667,6 +1730,10 @@ async fn run_update_inner(
             &branch,
             batch,
             &cfg.system_prompt,
+            skill_section.as_deref(),
+            cfg.mcp_enabled,
+            &cfg.mcp_specs,
+            cfg.git_tools,
             &cfg.engine,
             &cfg.tianji_agent,
             cancel_requested,
@@ -1706,6 +1773,10 @@ async fn run_update_inner(
                                 &branch,
                                 half,
                                 &cfg.system_prompt,
+                                skill_section.as_deref(),
+                                cfg.mcp_enabled,
+                                &cfg.mcp_specs,
+                                cfg.git_tools,
                                 &cfg.engine,
                                 &cfg.tianji_agent,
                                 cancel_requested,
@@ -1749,6 +1820,8 @@ async fn run_update_inner(
     if updated_docs.is_empty() && !step_error.is_empty() {
         updated_docs = format!("（{step_error}）");
     }
+    // 覆盖台账：模型在每批收尾输出的 `## 覆盖` 小节（缺了也不阻断，质检会点名）。
+    let coverage = extract_coverage(&updated_docs);
 
     // 整轮只跑一次质检（不再按批各跑一轮）。
     if step_error.is_empty() && cfg.quality_check {
@@ -1763,7 +1836,9 @@ async fn run_update_inner(
             &branch,
             &files_for_qc,
             &updated_docs,
+            &coverage,
             &cfg.quality_prompt,
+            cfg.git_tools,
             &cfg.engine,
             &cfg.tianji_agent,
             cancel_requested,
@@ -1902,21 +1977,24 @@ async fn run_update_inner(
         }
     }
     let failed = !step_error.is_empty();
-
-    let notice_summary = if step_error.is_empty() { updated_docs.clone() }
-        else { format!("本次未完整成功：{step_error}\n{updated_docs}") };
+    // 群通知给人看：失败原因翻成人话（附批次提示），原始错误只留在运行记录。
+    let failure_reason = if failed {
+        let hint = batch_hint(&step_error).unwrap_or_default();
+        Some(format!("{hint}{}", humanize_agent_error(&step_error)))
+    } else {
+        None
+    };
     let body = compose_notice(
         &branch,
+        &local_date_ymd(),
         &delta.files,
-        &notice_summary,
+        &updated_docs,
         &commit_note,
         &quality,
         preview,
         &sync_note,
+        failure_reason.as_deref(),
     );
-    let body = if failed {
-        format!("## ⚠️ 逆向文档更新失败\n{}", body.lines().skip(1).collect::<Vec<_>>().join("\n"))
-    } else { body };
     if !failed {
         progress.stage("notify", 92);
     }
@@ -1964,6 +2042,7 @@ async fn run_update_inner(
         preview,
         quality: quality.clone(),
         quality_blocking,
+        coverage,
         webhook_errors: webhook_errors.clone(),
         error: step_error,
     };
@@ -2159,12 +2238,16 @@ fn sync_source_repos(workspace: &str, repos: &[String], branch: &str) -> Vec<Str
     notes
 }
 
-/// 增量：文件列表 + commit 摘要 + 有界 diff。
+/// 增量：文件列表 + commit 摘要 + 变更规模（numstat）+ 有界 diff 摘录。
 #[derive(Debug, Clone)]
 pub struct ChangeDelta {
     pub head: String,
+    /// 本轮采集区间 `base..head`（模型自己用只读 git 工具查完整 diff 的依据）。
+    pub range: String,
     pub files: Vec<String>,
     pub commits: Vec<String>,
+    /// `git diff --numstat` 摘要（每行 `path +A -D`）：只是索引，详细行为让模型用 git_read 查。
+    pub stat: String,
     pub diff_excerpt: String,
     pub diff_truncated: bool,
 }
@@ -2264,17 +2347,22 @@ pub(crate) fn split_delta_half(delta: &ChangeDelta) -> Option<(ChangeDelta, Chan
     }
     let left = ChangeDelta {
         head: delta.head.clone(),
+        // 拆半重试：两半都带完整区间与规模索引（它们只是索引，不是 diff 正文）。
+        range: delta.range.clone(),
         files: delta.files[..mid].to_vec(),
         commits: delta.commits.clone(),
         diff_excerpt: delta.diff_excerpt.clone(),
         diff_truncated: delta.diff_truncated,
+        stat: delta.stat.clone(),
     };
     let right = ChangeDelta {
         head: delta.head.clone(),
+        range: delta.range.clone(),
         files: delta.files[mid..].to_vec(),
         commits: Vec::new(),
         diff_excerpt: String::new(),
         diff_truncated: false,
+        stat: String::new(),
     };
     Some((left, right))
 }
@@ -2377,6 +2465,9 @@ fn chunk_repo_delta(
                 String::new()
             },
             diff_truncated: delta.diff_truncated && *first,
+            // 区间与规模索引只给第一批（commit 摘要也在第一批），后续批看文件清单即可。
+            range: if *first { delta.range.clone() } else { String::new() },
+            stat: if *first { delta.stat.clone() } else { String::new() },
         });
         *first = false;
     };
@@ -2389,6 +2480,8 @@ fn chunk_repo_delta(
             commits: Vec::new(),
             diff_excerpt: String::new(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let n = format_file_list(
             &merge_change_deltas(&[(repo.to_string(), trial_delta)], diff_cap).files,
@@ -2416,10 +2509,13 @@ pub(crate) fn merge_change_deltas(
 ) -> ChangeDelta {
     let mut files = Vec::new();
     let mut commits = Vec::new();
+    let mut stat = String::new();
     let mut diff = String::new();
     let mut truncated = false;
     // 用「最后一仓」的 head 仅作占位；多仓 cursor 另存。
     let mut head = String::new();
+    // 采集区间：单仓一行；多仓按仓分组（模型据此自己 git log/diff）。
+    let mut ranges: Vec<(String, String)> = Vec::new();
     // 各仓至少分到一份 diff 线索，完整元数据不受 diff 预算影响。
     let per_repo_cap = diff_cap / parts.iter().filter(|(_, d)| !d.diff_excerpt.trim().is_empty()).count().max(1);
     for (repo, d) in parts {
@@ -2430,6 +2526,13 @@ pub(crate) fn merge_change_deltas(
         }
         for c in &d.commits {
             commits.push(format!("{label}:{c}"));
+        }
+        // 规模索引给多仓加小节；它很小，不参与 diff 预算。
+        if !d.stat.trim().is_empty() {
+            stat.push_str(&format!("### {label}\n{}\n", d.stat.trim_end()));
+        }
+        if !d.range.trim().is_empty() {
+            ranges.push((label.clone(), d.range.trim().to_string()));
         }
         if !d.diff_excerpt.trim().is_empty() {
             let block = format!("### {label}\n{}\n", d.diff_excerpt.trim_end());
@@ -2447,10 +2550,32 @@ pub(crate) fn merge_change_deltas(
             truncated |= d.diff_truncated;
         }
     }
+    // 规模索引上限：多仓 × 每仓 300 行已很够，防极端仓把提示词撑爆。
+    if stat.chars().count() > 8_000 {
+        stat = stat.chars().take(8_000).collect::<String>();
+        stat.push_str("\n…（规模索引已截断）");
+    }
+    let range = match ranges.len() {
+        0 => String::new(),
+        1 => ranges[0].1.clone(),
+        _ => ranges
+            .iter()
+            .map(|(label, r)| format!("{label}: {r}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    // 区间只是索引：极端多仓时截断，模型仍可用 git 自己查。
+    let range = if range.chars().count() > 1_000 {
+        format!("{}…（区间已截断）", range.chars().take(1_000).collect::<String>())
+    } else {
+        range
+    };
     ChangeDelta {
         head,
+        range,
         files,
         commits,
+        stat,
         diff_excerpt: diff,
         diff_truncated: truncated,
     }
@@ -2561,6 +2686,19 @@ fn collect_delta_range(workspace: &str, head: &str, range: &str) -> Result<Chang
         commits.truncate(LOG_LINE_CAP);
     }
 
+    // 变更规模索引：给模型「哪些文件改动大」的廉价线索；完整行为仍要 git_read 查。
+    let stat = {
+        let out = git_output(
+            workspace,
+            &["-c", "core.quotepath=false", "diff", "--numstat", &range],
+        )?;
+        if out.status.success() {
+            format_numstat(&String::from_utf8_lossy(&out.stdout), 300)
+        } else {
+            String::new()
+        }
+    };
+
     let (diff_excerpt, diff_truncated) = {
         let out = git_output(workspace, &["diff", &range])?;
         if out.status.success() {
@@ -2572,11 +2710,38 @@ fn collect_delta_range(workspace: &str, head: &str, range: &str) -> Result<Chang
 
     Ok(ChangeDelta {
         head: head.to_string(),
+        range: range.to_string(),
         files,
         commits,
+        stat,
         diff_excerpt,
         diff_truncated,
     })
+}
+
+/// `git diff --numstat` → `path +A -D`（二进制标 `（二进制）`），最多 `cap` 行。
+fn format_numstat(raw: &str, cap: usize) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(adds), Some(dels), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let path = path.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let (adds, dels) = (adds.trim(), dels.trim());
+        if adds == "-" || dels == "-" {
+            out.push(format!("- {path}（二进制）"));
+        } else {
+            out.push(format!("- {path}  +{adds} -{dels}"));
+        }
+        if out.len() >= cap {
+            break;
+        }
+    }
+    out.join("\n")
 }
 
 fn parse_names(text: &str) -> Vec<String> {
@@ -2617,6 +2782,16 @@ fn format_commit_list(commits: &[String]) -> String {
             .map(|c| format!("- {c}"))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+/// numstat 摘要段：每文件一行 `path  +A -D`；空则说明无数据。
+fn format_stat_section(delta: &ChangeDelta) -> String {
+    let stat = delta.stat.trim();
+    if stat.is_empty() {
+        "（无 numstat：可用 git_read diff --numstat 自查）".into()
+    } else {
+        stat.to_string()
     }
 }
 
@@ -2700,6 +2875,7 @@ pub fn build_docgen_prompt(
     branch: &str,
     delta: &ChangeDelta,
     repo: &str,
+    git_tools: bool,
 ) -> String {
     let tpl = normalize_prompt_template(template);
     let body = if tpl.is_empty() {
@@ -2716,7 +2892,28 @@ pub fn build_docgen_prompt(
     let mapping_section = if mapped.is_empty() { String::new() } else { format!("\n## 已有代码—文档映射（优先复用，仍须核对当前代码）\n{mapped}\n") };
     let commits = format_commit_list(&delta.commits);
     let files = format_file_list(&delta.files);
+    let stat = format_stat_section(delta);
     let diff = format_diff_section(delta);
+    let range_text = {
+        let r = delta.range.trim();
+        if r.is_empty() {
+            "（未知；用只读 git 工具（git_read / git_log）自行确认本轮范围）".to_string()
+        } else {
+            r.to_string()
+        }
+    };
+    // 索引形态随能力自适应：有 git 工具时只给「区间 + 本批文件」，其余模型自己查；
+    // 没有工具时退回旧的三节（提交摘要 / 规模 / diff 摘录），保证仍能写。
+    let index = if git_tools {
+        format!(
+            "## 本轮变更索引\n采集区间（用只读 git 工具查完整 diff / 历史）：{range_text}\n\n## 本批文件\n{files}\n"
+        )
+    } else {
+        format!(
+            "## 提交摘要\n{commits}\n\n## 变更文件\n{files}\n\n## 变更规模（numstat）\n{stat}\n\n## 变更 diff 摘录（已按上限截断）\n{diff}\n"
+        )
+    };
+    let file_count = delta.files.len().to_string();
     let updates_dir = updates_dir_rel(doc_dir);
     let date = local_date_ymd();
     fill_docgen_template(
@@ -2726,7 +2923,11 @@ pub fn build_docgen_prompt(
             ("branch", branch),
             ("commits", &commits),
             ("files", &files),
+            ("stat", &stat),
             ("diff", &diff),
+            ("range", &range_text),
+            ("index", &index),
+            ("file_count", &file_count),
             ("mapping", &mapping_section),
             ("date", &date),
             ("updates_dir", &updates_dir),
@@ -2741,6 +2942,7 @@ pub fn build_quality_prompt(
     branch: &str,
     files: &[String],
     summary: &str,
+    coverage: &str,
 ) -> String {
     let tpl = normalize_prompt_template(template);
     let body = if tpl.is_empty() {
@@ -2757,6 +2959,14 @@ pub fn build_quality_prompt(
             t
         }
     };
+    let coverage_text = {
+        let t = coverage.trim();
+        if t.is_empty() {
+            "（模型未输出覆盖台账）"
+        } else {
+            t
+        }
+    };
     let updates_dir = updates_dir_rel(doc_dir);
     let date = local_date_ymd();
     fill_docgen_template(
@@ -2766,10 +2976,38 @@ pub fn build_quality_prompt(
             ("branch", branch),
             ("files", &file_list),
             ("summary", summary_text),
+            ("coverage", coverage_text),
             ("date", &date),
             ("updates_dir", &updates_dir),
         ],
     )
+}
+
+/// 把选中的技能正文拼成「文档规范」段，追加到更新提示词末尾。
+///
+/// 技能目录复用 harness 体系：项目 `<workspace>/.ai-workbench/skills/*.md` +
+/// 全局 `%APPDATA%\...\harness\skills\`（项目优先）。未命中 / 正文为空时返回 None，
+/// 只记一行日志，绝不阻断更新。
+fn doc_skill_section(workspace: &str, skill_name: &str) -> Option<String> {
+    let name = skill_name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let config = crate::harness_config::load(Some(Path::new(workspace)));
+    let Some(skill) = config.skill(name) else {
+        crate::wecom_log::write("docgen", &format!("doc skill not found: {name}"));
+        return None;
+    };
+    let body: String = skill.body.chars().take(DOC_SKILL_SECTION_CAP).collect();
+    if body.trim().is_empty() {
+        crate::wecom_log::write("docgen", &format!("doc skill empty: {name}"));
+        return None;
+    }
+    crate::wecom_log::write(
+        "docgen",
+        &format!("doc skill injected: {name}（{}，{} 字符）", skill.scope, body.chars().count()),
+    );
+    Some(format!("\n\n## 文档规范（技能：{name}，必须遵守）\n{body}"))
 }
 
 async fn update_docs_with_agent(
@@ -2780,11 +3018,18 @@ async fn update_docs_with_agent(
     branch: &str,
     delta: &ChangeDelta,
     system_template: &str,
+    skill_section: Option<&str>,
+    mcp_enabled: bool,
+    mcp_specs: &[crate::mcp::McpServerSpec],
+    git_tools: bool,
     engine: &str,
     tianji_agent: &Option<crate::wecom_orchestrator::WecomAgentConfig>,
     cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
-    let system = build_docgen_prompt(system_template, doc_dir, branch, delta, workspace);
+    let mut system = build_docgen_prompt(system_template, doc_dir, branch, delta, workspace, git_tools);
+    if let Some(section) = skill_section {
+        system.push_str(section);
+    }
     let user = "请根据本次代码变更更新对应的逆向文档，追加当日功能更新，并给出更新摘要。";
 
     let summary = if engine.trim().eq_ignore_ascii_case("dsh") {
@@ -2831,7 +3076,7 @@ async fn update_docs_with_agent(
             web_search_key: agent_cfg.web_search_key.clone(),
             subagents: false,
             subagent_write: false,
-            mcp: Vec::new(),
+            mcp: if mcp_enabled { mcp_specs.to_vec() } else { Vec::new() },
             parallel_reads: agent_cfg.parallel_reads,
             retries: agent_cfg.retries,
             grep_ignore: agent_cfg.grep_ignore,
@@ -2839,7 +3084,8 @@ async fn update_docs_with_agent(
             context_tokens: agent_cfg.context_tokens,
             result_cap: agent_cfg.result_cap,
             anthropic_stream: agent_cfg.anthropic_stream,
-            mcp_enabled: false,
+            mcp_enabled,
+            document_git: git_tools,
         };
 
         run_agent_collect(
@@ -2866,13 +3112,15 @@ async fn quality_check_with_agent(
     branch: &str,
     changed: &[String],
     summary: &str,
+    coverage: &str,
     quality_template: &str,
+    git_tools: bool,
     engine: &str,
     tianji_agent: &Option<crate::wecom_orchestrator::WecomAgentConfig>,
     cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
     let user = "请尽快输出质量自检结论列表（优先摘要；最多抽查 3 个文件）。";
-    let system = build_quality_prompt(quality_template, doc_dir, branch, changed, summary);
+    let system = build_quality_prompt(quality_template, doc_dir, branch, changed, summary, coverage);
     let qc_label = quality_timeout_label();
 
     if engine.trim().eq_ignore_ascii_case("dsh") {
@@ -2927,6 +3175,7 @@ async fn quality_check_with_agent(
         result_cap: agent_cfg.result_cap,
         anthropic_stream: agent_cfg.anthropic_stream,
         mcp_enabled: false,
+        document_git: git_tools,
     };
     run_agent_collect(
         app,
@@ -3165,6 +3414,44 @@ fn is_code_reference_heading(line: &str) -> bool {
         || t.starts_with("## code refs")
 }
 
+fn is_coverage_heading(line: &str) -> bool {
+    let t = line.trim().to_lowercase();
+    t.starts_with("## 覆盖") || t.starts_with("## coverage")
+}
+
+/// 抽取模型自报的覆盖台账（`## 覆盖` 小节正文），多批拼接；没有则空串。
+///
+/// 只是「可核对的线索」：缺行不阻断本轮，由质检点名（`[建议]`）。
+pub fn extract_coverage(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_section = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if is_coverage_heading(t) {
+            in_section = true;
+            continue;
+        }
+        if in_section && t.starts_with("## ") {
+            in_section = false;
+        }
+        if !in_section || t.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(t);
+        if out.chars().count() > 4_000 {
+            break;
+        }
+    }
+    if out.chars().count() > 4_000 {
+        out = out.chars().take(4_000).collect();
+        out.push_str("\n…（台账已截断）");
+    }
+    out
+}
+
 /// 群通知只给人读：丢掉各段 `## 代码引用` 正文，但保留后续批次摘要
 ///（多批时原文是「批1摘要 + 引用 + 批2摘要 + 引用」，不能一刀切到文末）。
 fn strip_code_reference_section(text: &str) -> String {
@@ -3193,6 +3480,99 @@ fn strip_code_reference_section(text: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// 群通知只留「给人看」的部分：去掉代码引用、覆盖台账（sdk/service 源码路径）、
+/// 批次标题与落盘流水账，并压掉多余空行。
+///
+/// 运行记录 / 历史仍保存原文，这里只影响 webhook 正文。
+fn sanitize_notice_text(text: &str) -> String {
+    // 先按既有逻辑删掉每一段「## 代码引用」；再处理覆盖台账与流水账。
+    let base = strip_code_reference_section(text);
+    let mut out: Vec<String> = Vec::new();
+    let mut skipping_section = false;
+    for line in base.lines() {
+        let trimmed = line.trim();
+        // 覆盖台账（模型自报的「源码 → 文档」映射）：整节跳过，直到下一个标题。
+        if is_coverage_heading(trimmed) {
+            skipping_section = true;
+            continue;
+        }
+        if skipping_section && (trimmed.starts_with("## ") || trimmed.starts_with("### ")) {
+            skipping_section = false;
+        }
+        if skipping_section {
+            continue;
+        }
+        // 批次标题（多批时由宿主写入）。
+        if trimmed.starts_with("### 第 ") && trimmed.contains("批") {
+            continue;
+        }
+        // 模型自发的落盘流水账与路径映射行，业务读者不需要。
+        let noise = trimmed.contains("已归类落盘")
+            || trimmed.contains("产物全部在")
+            || (trimmed.starts_with("本批 ") && trimmed.contains("个文件"))
+            || (trimmed.starts_with("- ") && trimmed.contains(" → ") && trimmed.contains(".md"));
+        if noise {
+            continue;
+        }
+        if trimmed.is_empty() {
+            // 连续空行只留一个（这里先把空行压成占位，最后统一整理）。
+            if out.last().map(|l| l.is_empty()).unwrap_or(true) {
+                continue;
+            }
+            out.push(String::new());
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    while out.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        out.pop();
+    }
+    out.join("\n").trim().to_string()
+}
+
+/// 把模型/进程层的错误翻成人话（只用于群通知；运行记录保留原文）。
+fn humanize_agent_error(err: &str) -> String {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("进程已退出") || lower.contains("dsh 进程") {
+        "模型服务进程中断（正在重启或资源不足）".into()
+    } else if lower.contains("超时") || lower.contains("timeout") {
+        "模型响应超时".into()
+    } else if lower.contains("402") || lower.contains("积分") || lower.contains("额度") {
+        "模型额度不足".into()
+    } else if lower.contains("503") || lower.contains("502") || lower.contains("429") {
+        "模型服务暂时不可用".into()
+    } else {
+        "模型调用失败".into()
+    }
+}
+
+/// 从原始错误里抽「第 N 批 / 共 M 批」，抽不到就不提批次。
+fn batch_hint(err: &str) -> Option<String> {
+    for (idx, _) in err.match_indices("第 ") {
+        let rest = &err[idx + "第 ".len()..];
+        let token: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '/')
+            .collect();
+        if !token.contains('/') {
+            continue;
+        }
+        let after = &rest[token.len()..];
+        if !after.starts_with(" 批") {
+            continue;
+        }
+        let mut parts = token.split('/');
+        let (Some(done), Some(total)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if done.is_empty() || total.is_empty() {
+            continue;
+        }
+        return Some(format!("第 {done} 批 / 共 {total} 批："));
+    }
+    None
+}
+
 /// 质量全文压成一行：有阻断数 / 通过；空串表示不展示。
 fn summarize_quality(quality: &str) -> String {
     let q = quality.trim();
@@ -3210,19 +3590,23 @@ fn summarize_quality(quality: &str) -> String {
     }
 }
 
+/// 组装群通知正文：**给产品/业务看的**——只有业务要点，不出现批次、
+/// 源码路径、进程/模型内部术语；原始错误留在运行记录。
 fn compose_notice(
     branch: &str,
+    date: &str,
     changed: &[String],
     updated_docs: &str,
     commit_note: &str,
     quality: &str,
     preview: bool,
     sync_note: &str,
+    failure: Option<&str>,
 ) -> String {
     let docs = {
-        let stripped = strip_code_reference_section(updated_docs);
+        let stripped = sanitize_notice_text(updated_docs);
         if stripped.trim().is_empty() {
-            "（无更新摘要）".to_string()
+            "（本轮尚未写入文档）".to_string()
         } else {
             stripped.trim().to_string()
         }
@@ -3240,25 +3624,38 @@ fn compose_notice(
             format!("\n\n**质量：**{s}")
         }
     };
-    let title = if preview {
-        "## 👀 逆向文档预览（已写本地文档，未提交）"
-    } else {
-        "## 📘 逆向文档已更新"
-    };
     let sync_line = if sync_note.trim().is_empty() {
         String::new()
     } else {
         format!("\n\n**来源仓同步：**{}", sync_note.trim())
     };
+    let (title, section_title, failure_block, tech_note) = match failure {
+        Some(reason) => (
+            "## ⚠️ 逆向文档更新未完成",
+            "**已完成部分**",
+            format!(
+                "\n**本轮未完成**：{reason}。已完成的文档改动保留在本地，下次运行会继续补齐。\n"
+            ),
+            "\n\n_（批次与模型细节见「运行记录」）_",
+        ),
+        None if preview => (
+            "## 👀 逆向文档预览（已写本地文档，未提交）",
+            "**本次更新**",
+            String::new(),
+            "",
+        ),
+        None => ("## 📘 逆向文档已更新", "**本次更新**", String::new(), ""),
+    };
     format!(
         "{title}\n\
-**分支**：`{branch}`　**变更文件**：{} 个\n\n\
-**本次更新：**\n{}{}{}{}",
+**分支**：`{branch}` · {date} · 变更文件 {} 个\n{failure_block}\n\
+{section_title}\n{}{}{}{}{}",
         changed.len(),
         docs,
         commit_line,
         quality_line,
-        sync_line
+        sync_line,
+        tech_note
     )
 }
 
@@ -3506,6 +3903,82 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
+    fn coverage_section_is_extracted_across_batches() {
+        let text = "摘要一\n## 覆盖\n- src/a.rs → doc/a.md\n- src/b.rs → 跳过：无行为\n\n## 代码引用\n- `src/a.rs:Foo` → `doc/a.md`\n### 第 2/2 批\n## 覆盖\n- src/c.rs → doc/c.md";
+        let cov = extract_coverage(text);
+        assert!(cov.contains("src/a.rs → doc/a.md"), "{cov}");
+        assert!(cov.contains("src/b.rs → 跳过"), "{cov}");
+        assert!(cov.contains("src/c.rs → doc/c.md"), "{cov}");
+        assert!(!cov.contains("代码引用"), "引用节不该混进台账: {cov}");
+        assert_eq!(extract_coverage("没有任何小节"), "");
+    }
+
+    #[test]
+    fn numstat_lines_are_compact() {
+        let raw = "12\t3\tsrc/a.rs\n-\t-\tassets/logo.png\n0\t0\tsrc/b.rs";
+        let stat = format_numstat(raw, 10);
+        assert!(stat.contains("src/a.rs  +12 -3"), "{stat}");
+        assert!(stat.contains("assets/logo.png（二进制）"), "{stat}");
+        assert!(stat.contains("src/b.rs  +0 -0"), "{stat}");
+        assert_eq!(format_numstat("", 10), "");
+        // 行数上限：超出的不进来。
+        let many = (0..5).map(|i| format!("1\t1\tf{i}.rs")).collect::<Vec<_>>().join("\n");
+        assert_eq!(format_numstat(&many, 2).lines().count(), 2);
+    }
+
+    #[test]
+    fn doc_skill_section_reads_project_skills_and_caps_body() {
+        let dir = std::env::temp_dir().join(format!("aiwb-docgen-skill-{}", std::process::id()));
+        let skills = dir.join(".ai-workbench").join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        let body = "正文规则".to_string() + &"x".repeat(DOC_SKILL_SECTION_CAP + 100);
+        std::fs::write(
+            skills.join("doc-style.md"),
+            format!("---\nname: doc-style\ndescription: 文档风格\n---\n{body}"),
+        )
+        .unwrap();
+        let section = doc_skill_section(&dir.to_string_lossy(), "doc-style").expect("section");
+        assert!(section.contains("文档规范（技能：doc-style"));
+        // 正文按 DOC_SKILL_SECTION_CAP 截断（技能解析时已按 SKILL_CAP 截一次）
+        assert!(section.chars().count() <= DOC_SKILL_SECTION_CAP + 64);
+        // 未命中 / 空名字：返回 None，不阻断更新
+        assert!(doc_skill_section(&dir.to_string_lossy(), "missing").is_none());
+        assert!(doc_skill_section(&dir.to_string_lossy(), "  ").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn docgen_config_defaults_new_extension_fields_for_old_payloads() {
+        let cfg: DocgenConfig = serde_json::from_str(
+            r#"{"enabled":false,"time":"","releaseBranch":"","workspace":"","docDir":"","webhookUrl":"","qualityGate":false}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.doc_skill, "");
+        assert!(!cfg.mcp_enabled);
+        assert!(cfg.mcp_specs.is_empty());
+    }
+
+    #[test]
+    fn config_path_validation_catches_doc_dir_outside_workspace() {
+        // 真实事故复现：工作区与文档目录不相交，调度一跑必失败，保存时就该拦下。
+        assert!(validate_config_paths(
+            "D:/d_project/tc/test/pmys.saas.aio.ui",
+            "D:/d_project/tc/prod/pmys.saas.parent.pom/doc"
+        )
+        .is_err());
+        // 工作区内（大小写 / 斜杠方向 / verbatim 前缀差异都要容忍）。
+        assert!(validate_config_paths("D:/repo", "D:/repo/doc/模块").is_ok());
+        assert!(validate_config_paths(r"\\?\D:\repo", r"D:\repo\doc").is_ok());
+        // 相对路径不做包含判断，直接通过。
+        assert!(validate_config_paths("D:/repo", "doc/sub").is_ok());
+        // 空值不拦（运行时兜底解析）。
+        assert!(validate_config_paths("", "D:/anywhere/doc").is_ok());
+        assert!(validate_config_paths("D:/repo", "  ").is_ok());
+        // 危险成分照旧拦截。
+        assert!(validate_config_paths("D:/repo", "../outside/doc").is_err());
+    }
+
+    #[test]
     fn merge_keeps_later_repo_metadata_when_diff_budget_is_exhausted() {
         let delta = |head: &str, file: &str, diff: &str| ChangeDelta {
             head: head.into(),
@@ -3513,6 +3986,8 @@ mod tests {
             commits: vec![format!("{head} change")],
             diff_excerpt: diff.into(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let merged = merge_change_deltas(
             &[
@@ -3647,6 +4122,8 @@ mod tests {
             commits: vec!["c1".into()],
             diff_excerpt: "diff".into(),
             diff_truncated: true,
+            range: String::new(),
+            stat: String::new(),
         };
         let (left, right) = split_delta_half(&d).expect("should split");
         assert_eq!(left.files.len() + right.files.len(), files.len());
@@ -3662,6 +4139,8 @@ mod tests {
             commits: Vec::new(),
             diff_excerpt: String::new(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         assert!(split_delta_half(&small).is_none());
         assert!(is_turn_timeout_error("DSH 文档任务超过整轮 60 分钟期限，未确认完成"));
@@ -3774,6 +4253,32 @@ mod tests {
     }
 
     #[test]
+    fn merge_change_deltas_keeps_collection_ranges() {
+        let mk = |range: &str| ChangeDelta {
+            head: "h".into(),
+            range: range.into(),
+            files: vec!["a.rs".into()],
+            commits: vec![],
+            stat: String::new(),
+            diff_excerpt: String::new(),
+            diff_truncated: false,
+        };
+        // 单仓：一行区间原样带上。
+        let one = merge_change_deltas(&[(r"D:\x\svc".into(), mk("aaa..bbb"))], 24_000);
+        assert_eq!(one.range, "aaa..bbb");
+        // 多仓：按仓名前缀分组。
+        let many = merge_change_deltas(
+            &[
+                (r"D:\x\match".into(), mk("m1..m2")),
+                (r"D:\x\quote".into(), mk("q1..q2")),
+            ],
+            24_000,
+        );
+        assert!(many.range.contains("match: m1..m2"), "{}", many.range);
+        assert!(many.range.contains("quote: q1..q2"), "{}", many.range);
+    }
+
+    #[test]
     fn merge_change_deltas_prefixes_repo_names() {
         let a = ChangeDelta {
             head: "aaa".into(),
@@ -3781,6 +4286,8 @@ mod tests {
             commits: vec!["aaaa feat a".into()],
             diff_excerpt: "diff a".into(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let b = ChangeDelta {
             head: "bbb".into(),
@@ -3788,6 +4295,8 @@ mod tests {
             commits: vec!["bbbb feat b".into()],
             diff_excerpt: "diff b".into(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let m = merge_change_deltas(
             &[
@@ -3812,6 +4321,8 @@ mod tests {
             commits: vec!["c1".into()],
             diff_excerpt: "d".into(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let batches = split_deltas_for_budget(&[(r"D:\x\svc".into(), a)], 24_000, 24_000);
         assert_eq!(batches.len(), 1);
@@ -3826,6 +4337,8 @@ mod tests {
             commits: vec![format!("{name} commit")],
             diff_excerpt: format!("diff {name}"),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         // 每仓约 40 个带前缀文件行，合并后远超 400 字符预算 → 至少 2 批
         let parts = [
@@ -3856,6 +4369,8 @@ mod tests {
             commits: vec!["only once".into()],
             diff_excerpt: "big".into(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let batches = split_deltas_for_budget(&[(r"D:\x\big".into(), d)], 500, 24_000);
         assert!(batches.len() > 1, "expected file chunks, got {}", batches.len());
@@ -3886,6 +4401,8 @@ mod tests {
             commits: vec!["c".into()],
             diff_excerpt: "d".into(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let list_chars = format_file_list(&d.files).chars().count();
         assert!(list_chars < 24_000, "precondition: under char budget ({list_chars})");
@@ -3918,12 +4435,14 @@ mod tests {
     fn notice_lists_files_and_summary() {
         let n = compose_notice(
             "release",
+            "2026-11-13",
             &["a.rs".into(), "b.rs".into()],
             "更新了 a 文档",
             "已提交 1 篇文档（未推送）",
             "",
             false,
             "account.sdk：快进 2 个提交",
+            None,
         );
         assert!(n.contains("`release`"));
         assert!(n.contains("2 个"));
@@ -3939,12 +4458,14 @@ mod tests {
     fn notice_preview_title() {
         let n = compose_notice(
             "release",
+            "2026-11-13",
             &["a.rs".into()],
             "摘要",
             "",
             "- [建议] 可补示例\n未发现过时或矛盾",
             true,
             "",
+            None,
         );
         assert!(n.contains("预览"));
         assert!(n.contains("**质量：**通过"));
@@ -3963,12 +4484,14 @@ mod tests {
 - `doc/index.html:mdRender` → `doc/文档中心门户.md`\n";
         let n = compose_notice(
             "release",
+            "2026-11-13",
             &["doc/index.html".into()],
             full,
             "",
             "- [阻断] 模块文档与代码矛盾\n- [阻断] 日报编造了未出现模块",
             false,
             "",
+            None,
         );
         assert!(n.contains("门户支持按模块打开文档"));
         assert!(n.contains("触及文档：文档中心门户"));
@@ -3979,6 +4502,79 @@ mod tests {
         let refs = extract_summary_references(full, "demo", "abc", "doc");
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].symbol, "docs-data");
+    }
+
+    #[test]
+    fn notice_drops_coverage_paths_and_batch_chatter() {
+        let full = "- 渠道免登单独成篇\n\
+\n\
+### 第 1/4 批\n\
+本批 63 个文件已归类落盘，新建 1 篇模块文档 + 就地更新 7 篇。产物全部在 `doc/` 内。\n\
+\n\
+## 覆盖\n\
+- pmys.saas.account.sdk/src/main/java/com/pmys/saas/account/sdk/domain/ChannelConfig.java → doc/大后台产品功能文档/09_渠道接入与渠道SSO.md\n\
+\n\
+## 代码引用\n\
+- `a.java:Foo` → `doc/x.md`\n";
+        let n = compose_notice(
+            "release",
+            "2026-11-13",
+            &["a.java".into()],
+            full,
+            "",
+            "",
+            false,
+            "",
+            None,
+        );
+        assert!(n.contains("渠道免登单独成篇"), "{n}");
+        assert!(!n.contains("sdk"), "不能露出 sdk/service 路径: {n}");
+        assert!(!n.contains("pmys"), "{n}");
+        assert!(!n.contains("第 1/4 批"), "{n}");
+        assert!(!n.contains("已归类落盘"), "{n}");
+        assert!(!n.contains("产物全部在"), "{n}");
+        assert!(!n.contains("代码引用"), "{n}");
+    }
+
+    #[test]
+    fn failure_notice_speaks_business_language() {
+        let n = compose_notice(
+            "release",
+            "2026-11-13",
+            &["a.java".into()],
+            "- 已完成 A\n- 已完成 B",
+            "",
+            "",
+            false,
+            "",
+            Some("第 4 批 / 共 4 批：模型服务进程中断（正在重启或资源不足）"),
+        );
+        assert!(n.contains("逆向文档更新未完成"), "{n}");
+        assert!(n.contains("本轮未完成"), "{n}");
+        assert!(n.contains("已完成部分"), "{n}");
+        assert!(n.contains("已完成 A"), "{n}");
+        assert!(!n.contains("DSH"), "{n}");
+        assert!(!n.contains("失败"), "{n}");
+    }
+
+    #[test]
+    fn agent_errors_are_humanized() {
+        assert_eq!(
+            humanize_agent_error("文档更新失败（第 4/4 批）：DSH 进程已退出（可能被重启）"),
+            "模型服务进程中断（正在重启或资源不足）"
+        );
+        assert_eq!(humanize_agent_error("回合超时（60 分钟）"), "模型响应超时");
+        assert_eq!(
+            humanize_agent_error("upstream 503 service unavailable"),
+            "模型服务暂时不可用"
+        );
+        assert_eq!(humanize_agent_error("402 积分不足"), "模型额度不足");
+        assert_eq!(humanize_agent_error("some obscure bug"), "模型调用失败");
+        assert_eq!(
+            batch_hint("文档更新失败（第 4/4 批）：x").as_deref(),
+            Some("第 4 批 / 共 4 批：")
+        );
+        assert_eq!(batch_hint("no batch here"), None);
     }
 
     #[test]
@@ -4054,9 +4650,20 @@ fatal: Not possible to fast-forward, aborting.";
         assert!(!s.contains("## 代码引用"));
         assert!(!s.contains("a.rs:Foo"));
         assert!(!s.contains("b.rs:Bar"));
-        let n = compose_notice("release", &["a.rs".into(), "b.rs".into()], full, "预览模式：已直写文档目录（2 批）", "", true, "");
+        let n = compose_notice(
+            "release",
+            "2026-11-13",
+            &["a.rs".into(), "b.rs".into()],
+            full,
+            "预览模式：已直写文档目录（2 批）",
+            "",
+            true,
+            "",
+            None,
+        );
         assert!(n.contains("第二批业务要点"));
-        assert!(n.contains("第 2/2 批"));
+        // 群通知面向业务：批次标题属于内部流水账，清洗后不再出现。
+        assert!(!n.contains("第 2/2 批"), "{n}");
         assert_eq!(extract_summary_references(full, "demo", "abc", "doc").len(), 2);
     }
 
@@ -4157,20 +4764,34 @@ fatal: Not possible to fast-forward, aborting.";
             commits: vec!["deadbeef fix login".into()],
             diff_excerpt: "@@ -1 +1 @@\n-old\n+new".into(),
             diff_truncated: true,
+            range: String::new(),
+            stat: String::new(),
         };
-        let p = build_docgen_prompt("", "doc", "release", &delta, "D:/repo");
-        assert!(p.contains("提交摘要"));
-        assert!(p.contains("deadbeef fix login"));
-        assert!(p.contains("变更 diff 摘录") || p.contains("diff"));
-        assert!(p.contains("已截断"));
+        // 有只读 git 工具：只给「区间 + 本批文件」，不再内联提交清单与 diff。
+        let p = build_docgen_prompt("", "doc", "release", &delta, "D:/repo", true);
+        assert!(p.contains("本轮变更索引"), "{p}");
+        assert!(p.contains("采集区间"), "{p}");
+        assert!(p.contains("本批文件"), "{p}");
+        assert!(p.contains("- src/a.rs"), "{p}");
         assert!(p.contains("`doc/`") || p.contains("doc/"));
         assert!(p.contains("doc/updates"));
-        assert!(p.contains("功能更新") || p.contains("当日功能更新"));
+        assert!(p.contains("当日更新"));
+        assert!(!p.contains("## 提交摘要"), "git 模式不该内联提交清单");
+        assert!(!p.contains("deadbeef fix login"));
         assert!(!p.contains("{date}"));
         assert!(!p.contains("{updates_dir}"));
+        assert!(!p.contains("{index}"));
         assert!(!p.contains("更新策略"));
         assert!(!p.contains("模块变更策略"));
         assert!(!p.contains("【API 变更策略】"));
+
+        // 没有 git 工具：回落到旧的三节（提交摘要 / 规模 / diff 摘录）。
+        let plain = build_docgen_prompt("", "doc", "release", &delta, "D:/repo", false);
+        assert!(plain.contains("## 提交摘要"), "{plain}");
+        assert!(plain.contains("deadbeef fix login"));
+        assert!(plain.contains("变更 diff 摘录") || plain.contains("diff"));
+        assert!(plain.contains("已截断"));
+        assert!(plain.contains("本批文件") || plain.contains("变更文件"));
     }
 
     #[test]
@@ -4181,13 +4802,16 @@ fatal: Not possible to fast-forward, aborting.";
             commits: vec!["c1".into()],
             diff_excerpt: "d".into(),
             diff_truncated: false,
+            range: String::new(),
+            stat: String::new(),
         };
         let p = build_docgen_prompt(
-            "只看 {files} 改 {doc_dir} @ {branch} day={date} upd={updates_dir}",
+            "只看 {files} 改 {doc_dir} @ {branch} day={date} upd={updates_dir} idx={index} rg={range}",
             "docs",
             "main",
             &delta,
             "D:/repo",
+            true,
         );
         assert!(p.contains("- x.rs"));
         assert!(p.contains("docs"));
@@ -4196,11 +4820,13 @@ fatal: Not possible to fast-forward, aborting.";
         assert!(!p.contains("{files}"));
         assert!(!p.contains("{date}"));
         assert!(!p.contains("{updates_dir}"));
+        assert!(!p.contains("{index}"));
+        assert!(!p.contains("{range}"));
     }
 
     #[test]
     fn build_quality_prompt_injects_summary() {
-        let p = build_quality_prompt("", "doc", "release", &["a.rs".into()], "已更新 a");
+        let p = build_quality_prompt("", "doc", "release", &["a.rs".into()], "已更新 a", "src/a.rs → doc/a.md");
         assert!(p.contains("已更新 a"));
         assert!(p.contains("- a.rs"));
         assert!(p.contains("doc/updates"));
@@ -4216,10 +4842,10 @@ fatal: Not possible to fast-forward, aborting.";
         assert!(p.contains("`源码路径:符号` → `文档相对路径`") || p.contains("源码路径:符号"));
         assert!(p.contains("面向业务"));
         assert!(p.contains("仅供系统映射落库"));
-        assert!(p.contains("证据与写法"));
+        assert!(p.contains("第二步·调查"));
         assert!(p.contains("无行为变更"));
         assert!(p.contains("不要通读全库"));
-        assert!(p.contains("优先完成摘要与落盘"));
+        assert!(p.contains("优先完成落盘"));
     }
 
     #[test]

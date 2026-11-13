@@ -581,6 +581,7 @@ fn build_agent_request(
         result_cap: agent.result_cap,
         anthropic_stream: agent.anthropic_stream,
         mcp_enabled: agent.mcp_enabled,
+        document_git: true,
     }
 }
 

@@ -203,10 +203,15 @@ function App() {
               models: st.aiModels,
               mcpServers: st.mcpServers,
             });
+            // 通道 apply 不带文档轮的技能 / MCP 白名单，单独补一次文档配置；
+            // 失败只记日志，不阻断后面的通道启动流程。
+            await applyWecomDocgen(st.settings, st.aiModels, undefined, st.mcpServers).catch((e) =>
+              console.warn("docgen config apply failed:", e),
+            );
           } else {
             // 「逆向工程」是独立页，不依赖 IM 通道：通道关着也要把文档配置
             // （工作区 / 定时 / webhook）下发下去，否则定时更新永远起不来。
-            await applyWecomDocgen(st.settings, st.aiModels);
+            await applyWecomDocgen(st.settings, st.aiModels, undefined, st.mcpServers);
           }
           if (st.settings.weixinEnabled) {
             await applyWeixinChannel({

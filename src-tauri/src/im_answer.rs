@@ -167,6 +167,7 @@ pub async fn run_turn(
         result_cap: req.agent.result_cap,
         anthropic_stream: req.agent.anthropic_stream,
         mcp_enabled: req.agent.mcp_enabled,
+        document_git: true,
     };
 
     let mut rx = subscribe_agent_bridge(&req.request_id);

@@ -23,6 +23,13 @@ test('document guard allows only scoped writes and readonly review', () => {
     assert.ok(check('write', { file_path: 'docs/a.md' }));
     assert.ok(check('write', { file_path: 'doc/.git/config' }));
     for (const name of ['bash', 'pwsh', 'apply_patch', 'subagent', 'unknown']) assert.ok(check(name));
+    // 只读 git MCP：这些工具放行（服务自身只读），其余 git 名字/命令仍拒绝。
+    for (const name of ['git_log', 'git_diff', 'git_show', 'git_blame', 'git_status', 'git_names']) {
+      assert.equal(check(name, { range: 'a..b' }), undefined, name);
+      assert.equal(check(`mcp__docgen-git__${name}`, {}), undefined, `${name} 命名空间`);
+    }
+    assert.ok(check('git_push'));
+    assert.ok(check('mcp__docgen-git__git_commit'));
     assert.ok(check('write', { file_path: 'doc/a.md', sandbox_permissions: 'require_escalated' }));
     apply(ctx, { workspace: root, docDir: 'doc', readonly: true });
     assert.ok(check('write', { file_path: 'doc/a.md' }));

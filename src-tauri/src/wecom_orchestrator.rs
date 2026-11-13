@@ -1959,6 +1959,7 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
             result_cap: agent_cfg.result_cap,
             anthropic_stream: agent_cfg.anthropic_stream,
             mcp_enabled: agent_cfg.mcp_enabled,
+            document_git: true,
         };
 
         let mut rx = subscribe_agent_bridge(&request_id);

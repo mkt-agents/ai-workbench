@@ -394,58 +394,72 @@ export const DOCGEN_PROMPT_CHAR_CAP = 12_000;
 
 /**
  * 内置更新 system 模板（与 Rust `default_docgen_system_prompt` 保持一致）。
- * 占位符：{doc_dir} {branch} {commits} {files} {diff} {date} {updates_dir}
+ * 占位符：{doc_dir} {branch} {commits} {files} {stat} {diff} {range} {index} {file_count} {mapping} {date} {updates_dir}
+ * 有只读 git 工具时 {index} 只渲染「采集区间 + 本批文件」；没有时回落旧三节。
  * 业务摘要给人读；「## 代码引用」仅映射落库（群通知侧会剥离）。
  */
-export const DEFAULT_DOCGEN_SYSTEM_PROMPT = `你是代码逆向文档维护助手。工作区是一个代码仓库，有两类文档产物：
+export const DEFAULT_DOCGEN_SYSTEM_PROMPT = `本次更新：逆向文档同步 · 分支 {branch} · {date} · 本批 {file_count} 个文件
+（索引见下；完整 diff、提交语义与历史用只读 git 工具自查）
+
+你是代码逆向文档维护助手。工作区是一个代码仓库，有两类文档产物：
 - \`{doc_dir}/\`：按模块沉淀的逆向工程说明书（长期知识）
 - \`{updates_dir}/{date}.md\`：按日沉淀的「今天改了哪些功能」（面向人读的变更日志）
 当前在 release 分支「{branch}」，今日日期 \`{date}\`。
 
-## 提交摘要
-{commits}
+{index}{mapping}
 
-## 变更文件
-{files}
+工作流程（严格按顺序）：
+第一步·规划：把「本批文件」逐个归类，先写出「文件 → 目标文档」清单（可用 update_plan 展示）：
+- 按变更文件的路径层级推断归属模块（如 \`service/order/\`、\`controller/quote/\`），优先匹配 \`{doc_dir}/\` 下同名或同层级的文档与子目录；
+- 用 grep / symbols 验证：拿变更文件名、所在目录名、新增/改动的类名与方法名去搜，命中的才算找到；
+- 同一模块的多个文件合并到同一篇文档，不要一个文件一篇文档；
+- 找不到对应文档且该变更重要（新增能力 / 行为变化）时才新建一篇，文件名贴合模块目录名（不要建在 updates/ 下）。
+第二步·调查（写任何文档之前必须做，否则视为未完成）：
+- 看本轮完整变更：天玑用 \`git_read\`（先 \`{"sub":"log","args":"-5 --oneline"}\` 找到范围，再 \`{"sub":"diff","args":"-p <旧提交>..HEAD -- <路径>"}\`）；Harness 用 \`git_log\` / \`git_diff\`（如 \`{"range":"<旧提交>..HEAD","path":"src/order"}\`）；必要时 \`show\` / \`blame\`；
+- 索引只有采集区间与本批文件，可能不完整：提交语义、完整 diff、历史都要自己查，禁止只按文件名猜内容；
+- 用 read_file / grep / symbols / lsp 读透相关源码：入口、调用链、校验与错误分支、边界条件；
+- 只写读到的行为，禁止补未证实的架构或流程。
+第三步·写作：
+一、模块文档（\`{doc_dir}/\`）——写「行为」不写「动作」：
+- 讲清本批变更改变了什么业务行为——新增/修改/废弃了什么能力、入口在哪、调用链怎么走、有哪些校验、边界条件和错误处理；禁止把 commit 标题或 diff 片段原样抄进文档。
+- 已有文档：保持原结构，只改与代码不符的段落，在对应章节里就地更新；禁止重写全文、禁止堆砌项目背景和无关介绍。
+- 新建文档：覆盖职责、关键入口与调用链、核心类型或表、边界与错误四块；不写空泛的「概述 / 总结」套话。
+- 删除或重命名：同步改文档或标明已移除；纯格式/依赖噪音且无行为变化 → 模块文档跳过，日报记「无行为变更」。
+二、当日更新（\`{updates_dir}/{date}.md\`）：
+- 打开或新建，在文末追加一节（不要整文件覆盖）；节标题：\`## HH:MM · {branch}\`。
+- 正文用条目列出本批功能点（用人话，如「订单结算」「文档中心门户」），并注明各点更新了哪篇文档；只写本批出现的变更，禁止编造未出现的模块。
+第四步·收尾（必须输出）：
+1) 3–6 条**面向业务**的中文要点，每条一句话（改了什么能力、影响谁、更新了哪篇文档）；禁止行号、函数/符号名、JSON 字段、commit hash、工具过程，禁止背景铺垫和复述。
+2) 「## 代码引用」每行一条且必须用箭头（**仅供系统映射落库，不要写进业务摘要正文**；群通知会自动省略该节）：\`源码路径:符号\` → \`文档相对路径\`
+3) 「## 覆盖」每行一条，覆盖清单里的每个业务文件：\`源码路径\` → \`文档相对路径\`，或 \`源码路径\` → \`跳过：原因\`
+4) 摘要只写业务要点：不要写批次号、文件数量、落盘/保存过程，也不要贴代码路径（群通知会原文展示这些文字）。
 
-## 变更 diff 摘录（定向线索；完整内容请用工具读文件）
-{diff}
-
-任务：阅读这些变更涉及的代码，完成两类产物。
-一、更新 \`{doc_dir}/\` 下**对应**的逆向文档，使其与最新代码一致。
-如何找对应文档（按顺序尝试）：
-- 先在 \`{doc_dir}/\` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；
-- 文件名/模块名找不到时，按业务功能关键词再搜一次；
-- 仍找不到且该变更重要时，才在 \`{doc_dir}/\` 下新建一篇，文件名贴合模块（不要建在 updates/ 下）。
-证据与写法：
-- diff 只是线索；改文档前必须用工具读现行源码与目标 md；只写读到的行为，禁止补未证实的架构或流程。
-- 新建或大段改写时尽量覆盖：职责、关键入口与调用链、核心类型或表、边界与错误；已有文档保持原结构，只改过时处，删掉与代码不符的段落，不堆砌无关背景。
-- 删除或重命名：同步改文档或标明已移除；纯格式/依赖噪音且无行为变化 → 模块文档可跳过，日报记「无行为变更」。
-二、追加当日功能更新：打开或新建 \`{updates_dir}/{date}.md\`，在文末追加一节（不要整文件覆盖）。
-节标题示例：\`## HH:MM · {branch}\`；正文用条目列出本批涉及的功能点与触及的文档名（用人话，如「订单结算」「文档中心门户」）。只写本批出现的变更，禁止编造未出现的模块。
 硬规则：
 1. **只允许修改/新建 \`{doc_dir}/\` 目录内的文件**（含 \`{updates_dir}/\`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。
-2. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。
-3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。
-4. 本批只改**直接相关**文档与当日 updates 追加节；不要通读全库文档。
-5. 优先完成摘要与落盘，控制工具往返；无关文件跳过并在摘要说明。
-6. 收尾先写 3–6 条**面向业务**的中文要点（改了什么能力、对谁有影响、更新了哪几篇文档）；禁止行号、函数/符号名、JSON 字段、commit hash、工具过程（grep/读文件等）。另起「## 代码引用」，每行一条且必须用箭头（**仅供系统映射落库，不要写进业务摘要正文**；群通知会自动省略该节）：
-   - \`源码路径:符号\` → \`文档相对路径\``;
+2. 不要删除或移动文件；不要运行命令（只读 git 用 git_read / git_log 等工具），只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。
+3. 本批只改规划清单里的文档与当日 updates 追加节；不要通读全库文档。
+4. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。
+5. 控制工具往返：无关文件跳过并在摘要说明；优先完成落盘。`;
 
 /**
  * 内置质检 system 模板（与 Rust `default_docgen_quality_prompt` 保持一致）。
- * 占位符：{doc_dir} {branch} {files} {summary} {date} {updates_dir}
+ * 占位符：{doc_dir} {branch} {files} {summary} {coverage} {date} {updates_dir}
  */
 export const DEFAULT_DOCGEN_QUALITY_PROMPT = `你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 \`{doc_dir}/\`，今日 \`{date}\`。
 本轮更新摘要：
 {summary}
 
+本轮覆盖台账（模型自报；缺行不等于没做，但要点名核对）：
+{coverage}
+
 本次代码变更文件：
 {files}
 
-任务：只审**本轮更新**。优先根据摘要与文件列表下结论；需要时最多抽查 3 个相关文档（含当日 \`{updates_dir}/{date}.md\` 相关节）核对源码。用 3–8 条中文结论；禁止只复述摘要，禁止广搜或通读 \`{doc_dir}/\`，禁止把整库历史欠账当本轮事故。
-范围：
-- 只核对本轮改动触及的文档与源码；
+任务：只审**本轮更新**。优先根据摘要、台账与文件列表下结论；需要时最多抽查 3 个相关文档（含当日 \`{updates_dir}/{date}.md\` 相关节）核对源码，可用只读 git 工具（\`git_read\` 或 \`git_log\` / \`git_diff\` 等）看本轮完整 diff / 历史。用 3–8 条中文结论；禁止只复述摘要，禁止广搜或通读 \`{doc_dir}/\`，禁止把整库历史欠账当本轮事故。
+范围（逐项核对）：
+- 覆盖：本轮 \`{files}\` 里的业务文件是否都在摘要与台账里有着落（更新了哪篇，或写明跳过原因）；完全没着落的要点名缺哪些；
+- 深度：本轮新写的内容是否讲清了业务行为、调用链与边界，还是只复述了 commit 标题式的一句话；
+- 矛盾：新写的描述与现行源码是否一致；
 - 历史欠账、无关模块、总索引陈旧 → 一律 \`[建议]\`；
 - 吃不准就不要 \`[阻断]\`；超时前必须先给出结论列表。
 \`[阻断]\` 仅限（须同时满足「本轮新写/新改内容」）：
@@ -456,7 +470,7 @@ export const DEFAULT_DOCGEN_QUALITY_PROMPT = `你是逆向文档质量审查员�
 - \`[阻断] …\`；
 - \`[建议] …\`；
 - 无本轮硬伤写：\`未发现过时或矛盾\`。
-硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。`;
+硬规则：只读文件/搜索/只读 git（git_read 或 git_log / git_diff 等），禁止写文件、改文件、跑命令、删除。`;
 
 /** trim + 字符上限；空串表示走后端默认。 */
 export function normalizeDocgenPrompt(value: string | undefined): string {
@@ -671,6 +685,7 @@ export async function applyWecomDocgen(
   settings: AppSettings,
   models: AIModelConfig[],
   botId?: string,
+  mcpServers: McpServer[] = [],
 ): Promise<void> {
   const migrated = migrateWecomBotsSettings(settings);
   const active = getActiveWecomBot(migrated);
@@ -693,6 +708,15 @@ export async function applyWecomDocgen(
     (settings.wecomDocgenDshEffort ?? "").trim() || (settings.wecomDshEffort ?? "").trim();
   // 文档目录同样留空跟随「回答设置」，两处各自一套。
   const docDir = (settings.wecomDocgenDocDir ?? "").trim() || (settings.wecomDocDir ?? "").trim();
+  // 文档轮次的 MCP：只下发用户勾选且启用/填全的服务（服务级白名单，fail-closed）。
+  const selectedMcp = new Set(
+    (settings.wecomDocgenMcpServers ?? []).map((s) => (s ?? "").trim()).filter(Boolean),
+  );
+  const docgenMcp = settings.wecomDocgenMcpEnabled
+    ? mcpServers
+        .filter((s) => s.enabled && selectedMcp.has(s.name.trim()) && s.name.trim() && s.command.trim())
+        .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args ?? "" }))
+    : [];
   const docgenModel =
     resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
     models.find((m) => m.isDefault) ??
@@ -750,6 +774,10 @@ export async function applyWecomDocgen(
       repoAllowlist: normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist),
       systemPrompt: normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt),
       qualityPrompt: normalizeDocgenPrompt(settings.wecomDocgenQualityPrompt),
+      docSkill: (settings.wecomDocgenSkill ?? "").trim(),
+      mcpEnabled: Boolean(settings.wecomDocgenMcpEnabled) && docgenMcp.length > 0,
+      mcp: docgenMcp,
+      gitTools: settings.wecomDocgenGitTools !== false,
       engine:
         settings.wecomDocgenEngine === "dsh"
           ? "dsh"
@@ -849,6 +877,8 @@ export type WecomDocgenHistoryItem = {
   quality?: string;
   /** 质检识别出的明确阻断项数量。 */
   qualityBlocking?: number;
+  /** 模型自报的覆盖台账（`## 覆盖` 小节原文）；老记录没有。 */
+  coverage?: string;
   pushed: boolean;
   /** ok | fail | not-run | reused；旧记录为 undefined。 */
   commitStatus?: string;

@@ -150,6 +150,9 @@ pub struct AgentRunRequest {
     /// MCP 总开关（设置项，默认开；关掉这一轮不列任何 MCP 工具）。
     #[serde(default = "default_true")]
     pub mcp_enabled: bool,
+    /// 文档任务是否放开只读 git / LSP 工具（默认开；关掉回到旧的「只读文件」工具集）。
+    #[serde(default = "default_true")]
+    pub document_git: bool,
 }
 
 fn default_true() -> bool {
@@ -414,6 +417,9 @@ pub(crate) fn tool_specs() -> Value {
         { "name": "symbols",
           "description": "Where is a symbol defined? Heuristic scan (keyword + name: fn/def/class/interface/struct/impl/type/const…) over source files, returns path:line:signature. Use it before grepping a common name; it misses aliases and generated code, so cross-check with grep when the answer matters.",
           "parameters": obj(json!({ "query": s("Symbol name (or part of it)"), "path": s("File or folder (default: repo root)"), "kind": s("Only this kind: fn, class, interface, struct, impl, type, const…"), "max": n("Max hits (default 20, up to 50)") }), &["query"]) },
+        { "name": "git_read",
+          "description": "Read-only git query, so you can see the full change instead of a truncated excerpt. sub is one of log, show, diff, blame, status, rev-parse, merge-base, describe, shortlog, ls-files; args is the rest of the command line (e.g. \"-p HEAD~3..HEAD -- src/order\"). No shell, no writes; flags that write files or switch repos are refused.",
+          "parameters": obj(json!({ "sub": s("log | show | diff | blame | status | rev-parse | merge-base | describe | shortlog | ls-files"), "args": s("Arguments after the subcommand, e.g. -p -3 -- src/"), "path": s("Run inside this folder (default: repo root)") }), &["sub"]) },
         { "name": "task",
           "description": "Hand one self-contained search question to a read-only sub-agent; it returns at most 3000 characters of findings (paths + the lines that matter) instead of dumping matches into this conversation. It cannot change files, cannot ask the user, and cannot spawn another sub-agent. Give it a precise goal; do not use it for things you can check with one grep. Multiple task calls in one round run in parallel.",
           "parameters": obj(json!({ "goal": s("What to find out, specific enough to answer alone"), "path": s("Folder to start from (default: workspace root)") }), &["goal"]) },
@@ -1611,6 +1617,7 @@ fn call_summary(name: &str, args: &Value) -> String {
         "find_files" => format!("查找文件 {}", a("pattern")),
         "grep" => format!("搜索 {}", a("pattern")),
         "symbols" => format!("定位符号 {}", a("query")),
+        "git_read" => format!("git {} {}", a("sub"), clip(&a("args"), 60)),
         "web_fetch" => format!("抓取 {}", a("url")),
         "task" => format!("子代理：{}", a("goal")),
         // MCP 工具名是运行时的：只留服务器与工具名，别把整串参数塞进步骤行
@@ -2287,7 +2294,7 @@ async fn execute_tool(
         // 只读工具（含文档 / 表格）走同一个执行体：并发预取会把它搬到后台线程上跑。
         // 注意 `parallel: true` 的工具必须在这里实现，否则预取会拿到「不是只读工具」。
         "read_file" | "list_dir" | "find_files" | "grep" | "symbols" | "read_document"
-        | "read_table" | "table_query" => {
+        | "read_table" | "table_query" | "git_read" => {
             return execute_readonly(ctx.scope, ctx.request_id, name, args, ctx.grep_ignore);
         }
         "write_file" | "edit_file" => {
@@ -3412,6 +3419,8 @@ fn execute_readonly(
         "find_files" => fs::find_files(scope, args, request_id)?,
         "grep" => fs::grep(scope, args, request_id)?,
         "symbols" => crate::agent_symbols::symbols(scope, args, request_id)?,
+        // 只读 git 查询：白名单子命令 + 参数校验，直接起 git（不走 shell）。
+        "git_read" => crate::agent_git::git_read(scope, args)?,
         // 文档 / 表格同样是「Scope + 参数」就够：它们被标了 `parallel`，
         // 不在这里实现的话并发预取会拿到「不是只读文件工具」。
         "read_document" => {
@@ -3562,16 +3571,27 @@ pub(crate) async fn agent_run_document(app: AppHandle, req: AgentRunRequest, doc
     agent_run_inner(app, req, Some(doc_dir)).await
 }
 
-fn document_tool_allowed(scope: &Scope, doc_dir: &str, name: &str, args: &Value) -> bool {
+fn document_tool_allowed(
+    scope: &Scope,
+    doc_dir: &str,
+    name: &str,
+    args: &Value,
+    allow_git: bool,
+) -> bool {
     let raw = arg_str(args, "path");
     if raw.replace('\\', "/").split('/').any(|p| p == ".." || p.eq_ignore_ascii_case(".git")) { return false; }
     match name {
         "read_file" | "list_dir" | "find_files" | "grep" | "symbols" | "update_plan" => true,
+        // 只读 git / LSP：让文档任务能看完整 diff、历史与调用链；开关关掉即回到旧工具集。
+        "git_read" | "lsp" => allow_git,
         "write_file" | "edit_file" => {
             let Some(root) = scope.root.as_ref() else { return false; };
             let Ok(doc) = crate::agent_fs::resolve_in_repo(root, doc_dir) else { return false; };
             scope.resolve(&arg_str(args, "path")).map(|p| p.starts_with(doc)).unwrap_or(false)
         }
+        // MCP：工具名是运行时的；只有「逆向工程」页显式开启且勾选的服务才会被 attach，
+        // 真正派发前由 resolve_mcp 查本轮 (server, tool) 表，未列出的名字会直接失败。
+        _ if name.starts_with("mcp_") => true,
         _ => false,
     }
 }
@@ -3712,6 +3732,8 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
     }
     if document_dir.is_some() {
         tool_names.retain(|n| matches!(*n, "read_file" | "list_dir" | "find_files" | "grep" | "symbols" | "update_plan")
+            // 只读 git / LSP：让模型自己看完整 diff、调用链；仍受 document_tool_allowed 校验。
+            || (req.document_git && matches!(*n, "git_read" | "lsp"))
             || (permission != Permission::Read && matches!(*n, "write_file" | "edit_file")));
     }
     // 计划闸门解锁后要恢复的完整名单（含模式 / 技能 / 搜索过滤）。
@@ -3723,7 +3745,8 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
     // MCP：工具名是运行时的，不在这张静态表里；列一次、追加进 tools，然后按名字查找
     // 总开关关掉时连进程都不起：这一轮就是没有 mcp_* 工具
     // 计划锁定期间仍列服务（ctx 要能解析），但不把 mcp_* 塞进模型可见的 tools。
-    let mcp_servers = if document_dir.is_none() && req.mcp_enabled && !req.mcp.is_empty() {
+    // 文档任务（逆向工程）同样受总开关控制：只有用户显式开启并勾选服务才会列工具。
+    let mcp_servers = if req.mcp_enabled && !req.mcp.is_empty() {
         if plan_locked {
             let mut hidden = Vec::new();
             attach_mcp_tools(&app, &request_id, &req.mcp, &mut hidden, anthropic, false).await
@@ -3959,7 +3982,11 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
             // 预取也会派发 task：必须在任何预取之前执行宿主限制。
             for call in &turn.calls {
                 let args = parse_args(&call.arguments)?;
-                if !tool_names.contains(&call.name.as_str()) || !document_tool_allowed(&scope, dir, &call.name, &args) {
+                // mcp_* 不在静态工具表里：只有本轮已 attach（开关开 + 服务勾选）才可能被调用，
+                // 真正派发前还会由 resolve_mcp 查表，未列出的名字直接失败。
+                let listed = tool_names.contains(&call.name.as_str())
+                    || (req.mcp_enabled && call.name.starts_with("mcp_"));
+                if !listed || !document_tool_allowed(&scope, dir, &call.name, &args, req.document_git) {
                     let error = format!("文档任务拒绝越界或非文档操作：{}；未继续生成或发布", call.name);
                     emit_err(&app, &request_id, &error);
                     return Err(error);
@@ -4046,7 +4073,7 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
             p.arg_text = step_arg(&args);
             p.args = args;
             if let Some(dir) = document_dir.as_deref() {
-                if !document_tool_allowed(&scope, dir, &call.name, &p.args) {
+                if !document_tool_allowed(&scope, dir, &call.name, &p.args, req.document_git) {
                     p.skip = Some("文档任务只允许读文件、搜索与文档目录内的写入；命令及其它副作用均不执行".into());
                     prepared.push(p);
                     continue;
@@ -4055,6 +4082,12 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
             p.arg = gate_arg(&call.name, &p.args);
             p.command = if call.name == "run_command" { p.arg.clone() } else { String::new() };
             let mut gate = tool_gate(permission, &call.name, &p.arg);
+            // 文档任务无人值守：MCP 能力边界由用户在「逆向工程」页勾选的服务决定（默认关），
+            // 这里不再等审批——5 分钟超时自动拒绝会直接毁掉一整轮。未 attach 的工具名
+            // 查不到本轮 (server, tool) 表，派发阶段即失败，因此不会越界。
+            if document_dir.is_some() && call.name.starts_with("mcp_") && gate == Gate::Ask {
+                gate = Gate::Allow;
+            }
             // 改前确认：编辑档的写入从「直接落地」降为「先看 diff」
             p.diff_confirming =
                 crate::agent_policy::needs_diff_confirm(permission, &call.name, gate, req.diff_confirm);
@@ -4497,12 +4530,20 @@ mod tests {
     fn document_tasks_reject_commands_and_outside_writes() {
         let root = std::env::temp_dir().canonicalize().unwrap();
         let scope = crate::agent_fs::Scope::new(Some(root.clone()), false);
-        assert!(super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "doc/a.md"})));
-        assert!(!super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "code.rs"})));
-        assert!(!super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "doc/../code.rs"})));
-        assert!(!super::document_tool_allowed(&scope, "doc", "run_command", &json!({"command": "git status"})));
-        assert!(!super::document_tool_allowed(&scope, "doc", "remember", &json!({})));
-        assert!(super::document_tool_allowed(&scope, "doc", "read_file", &json!({"path": "code.rs"})));
+        assert!(super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "doc/a.md"}), true));
+        assert!(!super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "code.rs"}), true));
+        assert!(!super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "doc/../code.rs"}), true));
+        assert!(!super::document_tool_allowed(&scope, "doc", "run_command", &json!({"command": "git status"}), true));
+        assert!(!super::document_tool_allowed(&scope, "doc", "remember", &json!({}), true));
+        assert!(super::document_tool_allowed(&scope, "doc", "read_file", &json!({"path": "code.rs"}), true));
+        // 只读 git / LSP：开关开着才放行（关掉回到旧工具集），run_command 永远不在文档任务里。
+        assert!(super::document_tool_allowed(&scope, "doc", "git_read", &json!({"sub": "log"}), true));
+        assert!(super::document_tool_allowed(&scope, "doc", "lsp", &json!({}), true));
+        assert!(!super::document_tool_allowed(&scope, "doc", "git_read", &json!({"sub": "log"}), false));
+        assert!(!super::document_tool_allowed(&scope, "doc", "lsp", &json!({}), false));
+        // MCP：名字是运行时的。这里放行 mcp_ 前缀，但「哪些服务存在」由本轮 attach 的
+        // (server, tool) 表决定——未 attach 的名字在派发时 resolve_mcp 查不到，直接失败。
+        assert!(super::document_tool_allowed(&scope, "doc", "mcp_docs_search", &json!({}), true));
     }
 
     #[test]

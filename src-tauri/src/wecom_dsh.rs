@@ -95,7 +95,7 @@ pub struct DshStatus {
     pub mirror: Option<MirrorReport>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DshModelOption {
     /// ACP 的不透明取值（`["provider","model"]` 的 JSON）
@@ -104,7 +104,7 @@ pub struct DshModelOption {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DshModelGroup {
     pub group: String,
@@ -113,14 +113,14 @@ pub struct DshModelGroup {
 }
 
 /// 思考强度（`reasoning_effort`）；模型不支持时整栏缺席。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DshEffort {
     pub current: String,
     pub options: Vec<DshModelOption>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DshModelCatalog {
     pub current: String,
@@ -436,13 +436,32 @@ impl DshEngine {
 
     /// 文档任务在独立 worktree 中启动：更新用编辑档、质检用只读档，均加宿主工具闸门。
     /// 模型/思考强度保持不变；这一实例与问答通道分开，不给问答提权。
+    ///
+    /// 文档更新按批调用本函数。**配置没变就直接返回**：每重启一次 DSH 进程，
+    /// 下一轮 `session/resume` 都会失败（-32603）并新建会话，在 Harness 历史里
+    /// 留一条「未命名」空壳——一批一条，很容易堆成一片。
     pub async fn configure_docgen(&self, workspace: String, doc_dir: String, readonly: bool) {
+        let tier = if readonly { Tier::Read } else { Tier::Workspace };
+        {
+            let g = self.inner.lock().await;
+            if docgen_config_unchanged(
+                g.tier,
+                &g.workspace,
+                g.docgen_policy.as_ref(),
+                tier,
+                &workspace,
+                &doc_dir,
+                readonly,
+            ) {
+                return;
+            }
+        }
         self.stop().await;
         let (model, effort) = {
             let g = self.inner.lock().await;
             (g.model.clone(), g.effort.clone())
         };
-        self.configure(if readonly { Tier::Read } else { Tier::Workspace }, workspace, model, effort).await;
+        self.configure(tier, workspace, model, effort).await;
         self.inner.lock().await.docgen_policy = Some((doc_dir, readonly));
     }
 
@@ -524,8 +543,11 @@ impl DshEngine {
 
     /// 列模型：用一条探针会话读 ACP 的 `configOptions`。
     /// `refresh` = 丢掉缓存与旧探针，重新建。
+    ///
+    /// 探针会话会被 DSH 持久化（`session/close` 只关不删），在 Harness 的会话列表里
+    /// 表现为一条「未命名」空壳。所以这里尽量少建会话：先吃内存 / 磁盘缓存，
+    /// 真要刷新时先 `session/resume` 上次那条探针，只有 resume 不回来才 `session/new`。
     pub async fn models(&self, refresh: bool) -> Result<DshModelCatalog, String> {
-        let (shared, writer) = self.parts().await?;
         if !refresh {
             let cached = {
                 let g = self.inner.lock().await;
@@ -534,15 +556,85 @@ impl DshEngine {
             if let Some(catalog) = cached {
                 return Ok(catalog);
             }
+            // 进程重启后内存缓存已清空（teardown 会丢弃 catalog/probe）：磁盘缓存顶上来，
+            // 这样打开设置页不会再白白新建一条探针会话。
+            if let Some(cache) = load_catalog_cache(&self.tag) {
+                if !cache.catalog.is_empty() {
+                    let mut g = self.inner.lock().await;
+                    if g.catalog.is_none() {
+                        g.catalog = Some(cache.catalog.clone());
+                        if g.probe.is_none() && !cache.session_id.trim().is_empty() {
+                            g.probe = Some(cache.session_id.clone());
+                        }
+                    }
+                    return Ok(cache.catalog);
+                }
+            }
         }
 
-        // 旧探针先关掉，免得会话越攒越多。
-        let old = {
+        let (shared, writer) = self.parts().await?;
+        let previous = {
             let mut g = self.inner.lock().await;
             g.catalog = None;
             g.probe.take()
         };
-        if let Some(session) = old {
+        let workspace = self.workspace().await;
+
+        // 先试复用上次那条探针：resume 成功且带回 configOptions 就不必新建。
+        // 工作区变了（cwd 不匹配）就不试了，直接新建。
+        let cached_probe = load_catalog_cache(&self.tag)
+            .filter(|cache| cache.workspace == workspace)
+            .map(|cache| cache.session_id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        if let Some(probe) = cached_probe.as_deref() {
+            if let Ok(result) = rpc_call(
+                &shared,
+                &writer,
+                "session/resume",
+                json!({ "sessionId": probe, "cwd": workspace, "mcpServers": [] }),
+                SESSION_TIMEOUT,
+            )
+            .await
+            {
+                let catalog = parse_config_options(result.get("configOptions").unwrap_or(&Value::Null));
+                if !catalog.is_empty() {
+                    let session_id = result
+                        .get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(probe)
+                        .to_string();
+                    {
+                        let mut g = self.inner.lock().await;
+                        g.probe = Some(session_id.clone());
+                        g.catalog = Some(catalog.clone());
+                    }
+                    write_catalog_cache(
+                        &self.tag,
+                        &CatalogCache {
+                            session_id: session_id.clone(),
+                            workspace,
+                            saved_at_ms: chrono::Utc::now().timestamp_millis(),
+                            catalog: catalog.clone(),
+                        },
+                    );
+                    // 复用成功：上一个不同的探针仍要关掉（进程侧句柄），历史里那条删不掉。
+                    if let Some(old) = previous.filter(|old| old != &session_id) {
+                        let _ = rpc_call(
+                            &shared,
+                            &writer,
+                            "session/close",
+                            json!({ "sessionId": old }),
+                            SESSION_TIMEOUT,
+                        )
+                        .await;
+                    }
+                    return Ok(catalog);
+                }
+            }
+        }
+
+        // 旧探针先关掉，免得会话越攒越多。
+        if let Some(session) = previous {
             let _ = rpc_call(
                 &shared,
                 &writer,
@@ -553,7 +645,6 @@ impl DshEngine {
             .await;
         }
 
-        let workspace = self.workspace().await;
         let created = rpc_call(
             &shared,
             &writer,
@@ -570,9 +661,18 @@ impl DshEngine {
         let catalog = parse_config_options(created.get("configOptions").unwrap_or(&Value::Null));
         {
             let mut g = self.inner.lock().await;
-            g.probe = Some(session_id);
+            g.probe = Some(session_id.clone());
             g.catalog = Some(catalog.clone());
         }
+        write_catalog_cache(
+            &self.tag,
+            &CatalogCache {
+                session_id,
+                workspace,
+                saved_at_ms: chrono::Utc::now().timestamp_millis(),
+                catalog: catalog.clone(),
+            },
+        );
         Ok(catalog)
     }
 
@@ -1718,6 +1818,36 @@ pub(crate) fn ensure_skywalking_mcp_spec(
     ensure_skywalking_mcp_spec_in(&dir, &node, addr, header, tz_offset_minutes)
 }
 
+/// 内置只读 git MCP：让 DSH 文档任务自己查完整 diff / 历史 / blame，
+/// 而不是由宿主把 git 输出拼进提示词。脚本随二进制内嵌，写到应用数据目录，
+/// 用绝对 `node.exe` 启动（ACP 要求 command 是绝对路径）。
+pub(crate) fn ensure_docgen_git_mcp_spec(
+    workspace: &str,
+) -> Result<crate::mcp::McpServerSpec, String> {
+    let node = crate::dsh_commands::node_exe(&crate::dsh_commands::dsh_path_value())
+        .ok_or("未找到 node.exe：DSH 依赖的 Node 运行时不可用")?;
+    let dir = engine_dir()
+        .ok_or("找不到应用数据目录")?
+        .join("mcp");
+    ensure_docgen_git_mcp_spec_in(&dir, &node, workspace)
+}
+
+fn ensure_docgen_git_mcp_spec_in(
+    dir: &std::path::Path,
+    node_exe: &std::path::Path,
+    workspace: &str,
+) -> Result<crate::mcp::McpServerSpec, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建 mcp 目录失败：{e}"))?;
+    let script = dir.join("docgen-git-mcp.mjs");
+    std::fs::write(&script, include_str!("docgen_git_mcp.mjs"))
+        .map_err(|e| format!("写入文档 git MCP 脚本失败：{e}"))?;
+    Ok(crate::mcp::McpServerSpec {
+        name: "docgen-git".into(),
+        command: node_exe.to_string_lossy().to_string(),
+        args: format!("\"{}\" \"{}\"", script.display(), workspace.trim()),
+    })
+}
+
 fn ensure_skywalking_mcp_spec_in(
     dir: &std::path::Path,
     node_exe: &std::path::Path,
@@ -1846,6 +1976,70 @@ fn write_sessions(tag: &str, map: &HashMap<String, String>) {
         return;
     };
     if let Ok(text) = serde_json::to_string_pretty(map) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// 模型目录的磁盘缓存：进程重启后不必再 `session/new` 一条探针。
+///
+/// DSH 会把每条 ACP 会话持久化并在 Harness 的会话列表里显示；探针会话没有消息、
+/// 也没有标题，就是一条「未命名」空壳，`session/close` 只关不删。所以这里把
+/// （探针 id + 目录）落盘：`models()` 先吃缓存，需要刷新时先 `session/resume`
+/// 上次那条探针，只有 resume 不回来才新建。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogCache {
+    /// 探针会话 id（DSH 侧）。
+    #[serde(default)]
+    session_id: String,
+    /// 写缓存时的工作区：cwd 变了的旧探针 resume 会失败，直接新建。
+    #[serde(default)]
+    workspace: String,
+    #[serde(default)]
+    saved_at_ms: i64,
+    catalog: DshModelCatalog,
+}
+
+/// `configure_docgen` 的幂等判断：目标档位 / 工作区 / 文档策略与当前完全一致。
+fn docgen_config_unchanged(
+    current_tier: Tier,
+    current_workspace: &str,
+    current_policy: Option<&(String, bool)>,
+    tier: Tier,
+    workspace: &str,
+    doc_dir: &str,
+    readonly: bool,
+) -> bool {
+    current_tier == tier
+        && current_workspace == workspace
+        && current_policy
+            .map(|(dir, ro)| dir == doc_dir && *ro == readonly)
+            .unwrap_or(false)
+}
+
+fn catalog_file_name(tag: &str) -> String {
+    if tag.trim().is_empty() {
+        "catalog.json".to_string()
+    } else {
+        format!("catalog-{tag}.json")
+    }
+}
+
+fn catalog_cache_path(tag: &str) -> Option<PathBuf> {
+    engine_dir().map(|dir| dir.join(catalog_file_name(tag)))
+}
+
+fn load_catalog_cache(tag: &str) -> Option<CatalogCache> {
+    let path = catalog_cache_path(tag)?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_catalog_cache(tag: &str, cache: &CatalogCache) {
+    let Some(path) = catalog_cache_path(tag) else {
+        return;
+    };
+    if let Ok(text) = serde_json::to_string_pretty(cache) {
         let _ = std::fs::write(path, text);
     }
 }
@@ -2118,6 +2312,97 @@ async fn rpc_call_typed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_cache_roundtrips_and_uses_per_tag_files() {
+        let cache = CatalogCache {
+            session_id: "s-1".into(),
+            workspace: "D:/repo".into(),
+            saved_at_ms: 42,
+            catalog: DshModelCatalog {
+                current: "deepseek-v3".into(),
+                groups: vec![DshModelGroup {
+                    group: "deepseek".into(),
+                    name: "DeepSeek".into(),
+                    options: vec![DshModelOption {
+                        value: "[\"deepseek\",\"v3\"]".into(),
+                        name: "v3".into(),
+                        description: None,
+                    }],
+                }],
+                effort: Some(DshEffort {
+                    current: "high".into(),
+                    options: vec![DshModelOption {
+                        value: "high".into(),
+                        name: "High".into(),
+                        description: Some("更深思考".into()),
+                    }],
+                }),
+            },
+        };
+        let text = serde_json::to_string(&cache).unwrap();
+        let back: CatalogCache = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.session_id, "s-1");
+        assert_eq!(back.workspace, "D:/repo");
+        assert_eq!(back.catalog.current, "deepseek-v3");
+        assert_eq!(back.catalog.groups[0].options[0].name, "v3");
+        assert_eq!(back.catalog.effort.and_then(|e| Some(e.current)), Some("high".into()));
+        // 每个引擎（tag）一条缓存：通道空 tag、文档 bot-*/docgen-* 各自独立。
+        assert_eq!(catalog_file_name(""), "catalog.json");
+        assert_eq!(catalog_file_name("docgen-abc"), "catalog-docgen-abc.json");
+    }
+
+    #[test]
+    fn docgen_configure_is_idempotent_only_when_nothing_changed() {
+        let policy = ("doc".to_string(), false);
+        assert!(docgen_config_unchanged(
+            Tier::Workspace,
+            "D:/repo",
+            Some(&policy),
+            Tier::Workspace,
+            "D:/repo",
+            "doc",
+            false
+        ));
+        // 只读档（质检）与编辑档（更新）是不同的进程配置，必须重启。
+        assert!(!docgen_config_unchanged(
+            Tier::Workspace,
+            "D:/repo",
+            Some(&policy),
+            Tier::Read,
+            "D:/repo",
+            "doc",
+            true
+        ));
+        // 工作区变了、文档目录变了、策略还没设过：都要重启。
+        assert!(!docgen_config_unchanged(
+            Tier::Workspace,
+            "D:/repo",
+            Some(&policy),
+            Tier::Workspace,
+            "D:/other",
+            "doc",
+            false
+        ));
+        assert!(!docgen_config_unchanged(
+            Tier::Workspace,
+            "D:/repo",
+            Some(&policy),
+            Tier::Workspace,
+            "D:/repo",
+            "docs",
+            false
+        ));
+        assert!(!docgen_config_unchanged(
+            Tier::Workspace,
+            "D:/repo",
+            None,
+            Tier::Workspace,
+            "D:/repo",
+            "doc",
+            false
+        ));
+    }
 
     fn mock_rpc(
         replies: Vec<Value>,

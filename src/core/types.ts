@@ -399,6 +399,14 @@ export interface AppSettings {
   wecomDocgenSystemPrompt?: string;
   /** 质量自检 system 提示词模板（占位符 {doc_dir}/{branch}/{files}/{summary}）；空=内置默认 */
   wecomDocgenQualityPrompt?: string;
+  /** 注入更新提示词的技能名（项目 .ai-workbench/skills 或全局 harness 技能）；空=不注入 */
+  wecomDocgenSkill?: string;
+  /** 文档轮次是否启用 MCP 工具（默认关；无人值守，需显式开启并勾选服务） */
+  wecomDocgenMcpEnabled?: boolean;
+  /** 放开给文档轮次的 MCP 服务名（服务级白名单；未勾选的服务不会列工具） */
+  wecomDocgenMcpServers?: string[];
+  /** 文档轮次是否放开只读 git / LSP 工具（默认开；关掉回到旧的只读文件工具集） */
+  wecomDocgenGitTools?: boolean;
   /** 预览模式：产物保留独立 worktree */
   wecomDocgenPreview?: boolean;
   /** 全量建档：忽略采集点，从当前 HEAD 建初始文档（一次性动作） */

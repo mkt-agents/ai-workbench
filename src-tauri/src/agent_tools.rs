@@ -78,6 +78,8 @@ pub(crate) const TOOLS: &[ToolDef] = &[
     ToolDef { name: "find_files", group: ToolGroup::Code, gate: GateKind::Look, parallel: true, action: false },
     ToolDef { name: "grep", group: ToolGroup::Code, gate: GateKind::Look, parallel: true, action: false },
     ToolDef { name: "symbols", group: ToolGroup::Code, gate: GateKind::Look, parallel: true, action: false },
+    // 只读 git 查询（log/show/diff/blame…）：文档任务靠它看完整变更。
+    ToolDef { name: "git_read", group: ToolGroup::Code, gate: GateKind::Look, parallel: true, action: false },
     // —— 代码：写 ——
     ToolDef { name: "write_file", group: ToolGroup::Code, gate: GateKind::Write, parallel: false, action: true },
     ToolDef { name: "edit_file", group: ToolGroup::Code, gate: GateKind::Write, parallel: false, action: true },

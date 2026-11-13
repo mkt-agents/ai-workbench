@@ -16,7 +16,7 @@ import GroupedSelect from "./GroupedSelect";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useGlobalStore } from "../core/store";
 import type { AppSettings, DshModelCatalog, GitScannedRepo } from "../core/types";
-import { invocations } from "../core/store/invocations";
+import { invocations, type HarnessSkillView } from "../core/store/invocations";
 import {
   DEFAULT_DOCGEN_QUALITY_PROMPT,
   DEFAULT_DOCGEN_SYSTEM_PROMPT,
@@ -322,6 +322,7 @@ export default function ReverseDocPage() {
   const confirm = useConfirm();
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
+  const mcpServers = useGlobalStore((s) => s.mcpServers);
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -329,6 +330,8 @@ export default function ReverseDocPage() {
   const [docgenView, setDocgenView] = useState<"run" | "engine" | "publish" | "record">("run");
   const [docgenPromptTab, setDocgenPromptTab] = useState<"system" | "quality">("system");
   const [docgenBusy, setDocgenBusy] = useState(false);
+  /** 「测试连通」单独一个状态：点击后立刻有反馈，且 60s 客户端兜底 */
+  const [docgenTesting, setDocgenTesting] = useState(false);
   const [docgenHistory, setDocgenHistory] = useState<WecomDocgenHistoryItem[]>([]);
   const [docgenHistoryBusy, setDocgenHistoryBusy] = useState(false);
   const [docgenProgress, setDocgenProgress] = useState<WecomDocgenProgress | null>(null);
@@ -338,6 +341,8 @@ export default function ReverseDocPage() {
   const [docgenResetBusy, setDocgenResetBusy] = useState(false);
   // null = 尚未成功扫描；[] = 扫描成功但没有子仓。两者不能混为一谈。
   const [docgenScanned, setDocgenScanned] = useState<GitScannedRepo[] | null>(null);
+  // 可选技能（项目 .ai-workbench/skills + 全局 harness/skills，同一套 SKILL.md）
+  const [docSkills, setDocSkills] = useState<HarnessSkillView[]>([]);
   const [docgenScanRoot, setDocgenScanRoot] = useState("");
   // DSH 引擎的模型目录（ACP configOptions），按需懒加载
   const [catalog, setCatalog] = useState<DshModelCatalog | null>(null);
@@ -368,7 +373,12 @@ export default function ReverseDocPage() {
     try {
       if (Object.keys(next).length) setSettings(next);
       const merged = { ...useGlobalStore.getState().settings, ...next };
-      await applyWecomDocgen(merged, useGlobalStore.getState().aiModels);
+      await applyWecomDocgen(
+        merged,
+        useGlobalStore.getState().aiModels,
+        undefined,
+        useGlobalStore.getState().mcpServers,
+      );
       setMsg(t("wecom.saved"));
       void refreshSchedule();
     } catch (e) {
@@ -438,6 +448,29 @@ export default function ReverseDocPage() {
   const docgenInheritedDocDir = (settings.wecomDocDir ?? "").trim();
   /** 扫描子仓的根目录（白名单本来就是在它下面勾）。 */
   const docgenScanBase = (docgenWorkspace || docgenInheritedWorkspace).trim();
+  // 技能列表跟着工作区走：项目层优先、全局兜底（后端 harness_config_load 已合并）
+  useEffect(() => {
+    if (!docgenScanBase) {
+      setDocSkills([]);
+      return;
+    }
+    let cancelled = false;
+    void invocations
+      .invokeHarnessConfig(docgenScanBase)
+      .then((cfg) => {
+        if (!cancelled) setDocSkills(cfg.skills ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setDocSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [docgenScanBase]);
+  /** 文档轮次可选的 MCP 服务：已启用且填全（与「天玑 → MCP 服务」同一份数据） */
+  const docgenMcpChoices = mcpServers.filter(
+    (s) => s.enabled && s.name.trim() && s.command.trim(),
+  );
   /** 运行条上的「下次运行」：cron 优先，其次每日时刻。 */
   const docgenScheduleLabel = docgenNextRunAt
     ? t("wecom.docgenNextRunAt", { time: docgenNextRunAt })
@@ -603,18 +636,38 @@ export default function ReverseDocPage() {
                 <button
                   type="button"
                   className="btn btn-secondary btn-small"
-                  disabled={docgenBusy}
+                  disabled={docgenBusy || docgenTesting}
                   title={t("wecom.docgenTestHint")}
                   onClick={() => {
-                    setDocgenBusy(true);
-                    setMsg("");
+                    if (docgenTesting) return;
+                    setDocgenTesting(true);
+                    // 先给反馈：后端最长 ~45s（webhook 20s + 引擎检测 10s + git 12s），
+                    // 没有这行用户会以为按钮没反应。
+                    setMsg(t("wecom.docgenTesting"));
+                    let settled = false;
+                    const guard = window.setTimeout(() => {
+                      if (settled) return;
+                      settled = true;
+                      setDocgenTesting(false);
+                      setMsg(t("wecom.docgenTestTimeout"));
+                    }, 60_000);
                     void testWecomDocgen()
-                      .then((r) => setMsg(r))
-                      .catch((e) => setMsg(String(e)))
-                      .finally(() => setDocgenBusy(false));
+                      .then((r) => {
+                        if (settled) return;
+                        settled = true;
+                        window.clearTimeout(guard);
+                        setMsg(r);
+                      })
+                      .catch((e) => {
+                        if (settled) return;
+                        settled = true;
+                        window.clearTimeout(guard);
+                        setMsg(String(e));
+                      })
+                      .finally(() => setDocgenTesting(false));
                   }}
                 >
-                  {t("wecom.docgenTestBtn")}
+                  {docgenTesting ? t("wecom.docgenTestingBtn") : t("wecom.docgenTestBtn")}
                 </button>
                 <button
                   type="button"
@@ -1369,6 +1422,121 @@ export default function ReverseDocPage() {
                 />
               ) : null}
               </div>
+            </div>
+
+            {/* 3a-2. 扩展能力：文档规范技能（提示词层）+ MCP 工具（默认关，服务级白名单） */}
+            <div className="wecom-block-card" hidden={docgenView !== "engine"}>
+              <div className="wecom-block-head">
+                <div className="wecom-block-head-main">
+                  <span className="wecom-block-icon" aria-hidden>
+                    <Sparkles size={14} />
+                  </span>
+                  <span className="wecom-block-title">{t("wecom.subDocgenExtensions")}</span>
+                </div>
+              </div>
+
+              <Row
+                label={t("wecom.docgenSkillLabel")}
+                control={
+                  <select
+                    className="input-field wecom-split"
+                    value={settings.wecomDocgenSkill ?? ""}
+                    disabled={busy || !docgenScanBase || docSkills.length === 0}
+                    onChange={(e) => void push({ wecomDocgenSkill: e.target.value || undefined })}
+                  >
+                    <option value="">{t("wecom.docgenSkillNone")}</option>
+                    {docSkills.map((skill) => (
+                      <option key={`${skill.scope}:${skill.name}`} value={skill.name}>
+                        {skill.name}
+                        {skill.whenToUse || skill.description
+                          ? ` — ${skill.whenToUse || skill.description}`
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                }
+                hint={
+                  <p className="setting-hint">
+                    {!docgenScanBase
+                      ? t("wecom.docgenSkillNeedWorkspace")
+                      : docSkills.length === 0
+                        ? t("wecom.docgenSkillEmpty")
+                        : t("wecom.docgenSkillHint")}
+                  </p>
+                }
+              />
+
+              <Row
+                asSwitch
+                label={t("wecom.docgenMcpLabel")}
+                control={
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settings.wecomDocgenMcpEnabled)}
+                      disabled={busy || docgenMcpChoices.length === 0}
+                      onChange={(e) => void push({ wecomDocgenMcpEnabled: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                }
+                hint={
+                  <p className="setting-hint">
+                    {docgenMcpChoices.length === 0
+                      ? t("wecom.docgenMcpEmptyHint")
+                      : t("wecom.docgenMcpHint")}
+                  </p>
+                }
+              />
+
+              {settings.wecomDocgenMcpEnabled && docgenMcpChoices.length > 0 ? (
+                <div className="wecom-allowlist">
+                  <p className="setting-hint">{t("wecom.docgenMcpServersHint")}</p>
+                  <ul className="wecom-allowlist-list">
+                    {docgenMcpChoices.map((server) => {
+                      const picked = (settings.wecomDocgenMcpServers ?? []).includes(server.name);
+                      return (
+                        <li key={server.id} className="wecom-allowlist-item">
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={picked}
+                              disabled={busy}
+                              onChange={(e) => {
+                                const cur = new Set(settings.wecomDocgenMcpServers ?? []);
+                                if (e.target.checked) cur.add(server.name);
+                                else cur.delete(server.name);
+                                const next = Array.from(cur);
+                                void push({
+                                  wecomDocgenMcpServers: next.length ? next : undefined,
+                                });
+                              }}
+                            />
+                            <span className="wecom-allowlist-name">{server.name}</span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null}
+
+              <Row
+                asSwitch
+                label={t("wecom.docgenGitToolsLabel")}
+                control={
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.wecomDocgenGitTools !== false}
+                      disabled={busy}
+                      onChange={(e) => void push({ wecomDocgenGitTools: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                }
+                hint={<p className="setting-hint">{t("wecom.docgenGitToolsHint")}</p>}
+              />
             </div>
 
             {/* 3b. 提示词：更新 | 质检 分段单编辑器（草稿状态收在卡片内部，打字不牵动整页） */}

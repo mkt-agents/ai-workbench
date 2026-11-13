@@ -610,21 +610,40 @@ pub async fn wecom_docgen_test(
         (docgen, sky)
     };
     let mut lines: Vec<String> = Vec::new();
+    let started = std::time::Instant::now();
+    crate::wecom_log::write("docgen", "test 开始：连通自检（工作区 / webhook / SkyWalking / 引擎）");
 
     // 1) 工作区 + release 分支（父目录可解析到含文档的子仓）
     let workspace_cfg = cfg.workspace.trim().to_string();
     if workspace_cfg.is_empty() {
         lines.push("⚠️ 工作区未配置（自动更新依赖它）".into());
     } else {
-        match crate::git_commands::resolve_git_workspace(&workspace_cfg, &cfg.doc_dir_or_default())
-        {
-            Err(e) => {
+        // git 是阻塞调用：放到阻塞线程池并加超时，避免把运行时线程卡住让整条命令「没反应」。
+        let resolved = {
+            let ws = workspace_cfg.clone();
+            let doc = cfg.doc_dir_or_default();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(12),
+                tokio::task::spawn_blocking(move || {
+                    crate::git_commands::resolve_git_workspace(&ws, &doc)
+                }),
+            )
+            .await
+        };
+        match resolved {
+            Err(_) => {
+                lines.push("❌ 工作区解析超时（12s）：检查路径是否可访问、git 是否卡住".into());
+            }
+            Ok(Err(e)) => {
+                lines.push(format!("❌ 自检线程异常：{e}"));
+            }
+            Ok(Ok(Err(e))) => {
                 lines.push(format!(
                     "❌ {}",
                     crate::git_commands::path_for_markdown(&e)
                 ));
             }
-            Ok(workspace) => {
+            Ok(Ok(Ok(workspace))) => {
                 let shown = crate::git_commands::path_for_markdown(&workspace);
                 if workspace != workspace_cfg {
                     lines.push(format!(
@@ -691,12 +710,32 @@ pub async fn wecom_docgen_test(
         }
     }
 
-    // 2) webhooks（企微 / 飞书 / 钉钉）
-    let (any_ok, errs) = crate::wecom_docgen::notify_all(
-        &cfg,
-        "✅ AI Workbench 连通测试：逆向文档通道可用。",
+    crate::wecom_log::write(
+        "docgen",
+        &format!("test 工作区检查完成（{} ms）", started.elapsed().as_millis()),
+    );
+
+    // 2) webhooks（企微 / 飞书 / 钉钉）；每个请求自带 15s 超时，这里再兜一层总超时。
+    let webhook_result = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        crate::wecom_docgen::notify_all(&cfg, "✅ AI Workbench 连通测试：逆向文档通道可用。"),
     )
     .await;
+    let (any_ok, errs) = match webhook_result {
+        Ok(pair) => pair,
+        Err(_) => {
+            crate::wecom_log::write("docgen", "test webhook 超时（20s）");
+            (false, vec!["webhook 超时（20s）：检查网络或密钥".to_string()])
+        }
+    };
+    crate::wecom_log::write(
+        "docgen",
+        &format!(
+            "test webhook 完成（{} ms）：ok={any_ok} errs={}",
+            started.elapsed().as_millis(),
+            errs.len()
+        ),
+    );
     if errs.iter().any(|e| e.contains("未配置任何")) {
         lines.push("⚠️ 群 webhook 未配置（不会推送变动通知）".into());
     } else if errs.is_empty() && any_ok {
@@ -735,19 +774,35 @@ pub async fn wecom_docgen_test(
 
     // 4) 更新引擎（与「回答设置」的引擎相互独立）
     if cfg.uses_dsh() {
-        match crate::dsh_commands::dsh_installed_version() {
-            Some(v) => lines.push(format!(
+        // 首次检测可能落到 `npm list -g`（慢）：放阻塞线程 + 超时，别拖住整条命令。
+        let version = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::task::spawn_blocking(crate::dsh_commands::dsh_installed_version),
+        )
+        .await;
+        match version {
+            Ok(Ok(Some(v))) => lines.push(format!(
                 "✅ 文档更新引擎：DeepSeek Harness v{v}（独立进程、编辑档，跑完即停；模型/思考强度在该页单独指定，留空沿用回答设置）"
             )),
-            None => lines.push(
+            Ok(Ok(None)) => lines.push(
                 "❌ 文档更新引擎选了 DeepSeek Harness，但本机没装 DSH（先到 Harness 页安装）"
                     .into(),
             ),
+            Ok(Err(e)) => lines.push(format!("❌ 文档更新引擎检测失败：{e}")),
+            Err(_) => lines.push("❌ 文档更新引擎检测超时（10s）：npm 无响应，稍后重试".into()),
         }
     } else {
         lines.push("✅ 文档更新引擎：天玑（模型广场 → 场景模型 aiHub）".into());
     }
 
+    crate::wecom_log::write(
+        "docgen",
+        &format!(
+            "test 完成（{} ms，{} 行结果）",
+            started.elapsed().as_millis(),
+            lines.len()
+        ),
+    );
     Ok(lines.join("\n"))
 }
 
@@ -852,6 +907,18 @@ pub struct DocgenApplyRequest {
     pub system_prompt: String,
     #[serde(default)]
     pub quality_prompt: String,
+    /// 注入更新提示词的技能名（项目 / 全局技能目录）；空=不注入。
+    #[serde(default)]
+    pub doc_skill: String,
+    /// 文档轮次是否启用 MCP 工具（默认关，无人值守场景需显式开启）。
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    /// 放开给文档轮次的 MCP 服务（服务级白名单，未列出的服务不会列工具）。
+    #[serde(default)]
+    pub mcp: Vec<crate::mcp::McpServerSpec>,
+    /// 文档轮次是否放开只读 git / LSP 工具（默认开）。
+    #[serde(default = "default_true")]
+    pub git_tools: bool,
     /// `inherit` | `tianji` | `dsh`；`inherit` 跟随回话引擎。
     #[serde(default)]
     pub engine: String,
@@ -867,6 +934,30 @@ pub struct DocgenApplyRequest {
     pub auto_commit: bool,
     #[serde(default)]
     pub auto_push: bool,
+}
+
+/// 文档引擎下发的 MCP 列表：用户勾选的服务 + 内置只读 git（受 `git_tools` 控制）。
+///
+/// 内置 git 服务让模型自己查完整 diff / 历史；生成失败只让这一轮少个工具，
+/// 不影响配置保存。
+fn effective_docgen_mcp(
+    docgen: &crate::wecom_docgen::DocgenConfig,
+) -> Vec<crate::mcp::McpServerSpec> {
+    let mut specs = docgen.mcp_specs.clone();
+    if docgen.git_tools && !docgen.workspace.trim().is_empty() {
+        match crate::wecom_dsh::ensure_docgen_git_mcp_spec(&docgen.workspace) {
+            Ok(spec) => {
+                specs.retain(|s| !s.name.eq_ignore_ascii_case(&spec.name));
+                specs.push(spec);
+                crate::wecom_log::write("docgen", "builtin git MCP 已下发（6 个只读工具）");
+            }
+            Err(e) => crate::wecom_log::write(
+                "docgen",
+                &format!("builtin git MCP 不可用（本轮无 git 工具）：{e}"),
+            ),
+        }
+    }
+    specs
 }
 
 #[tauri::command]
@@ -917,10 +1008,24 @@ pub async fn wecom_docgen_apply(
         repo_allowlist: normalize_repo_allowlist(&req.repo_allowlist, &workspace),
         system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.system_prompt),
         quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.quality_prompt),
+        doc_skill: req.doc_skill.trim().to_string(),
+        mcp_enabled: req.mcp_enabled,
+        mcp_specs: if req.mcp_enabled {
+            req.mcp
+                .iter()
+                .filter(|s| !s.name.trim().is_empty() && !s.command.trim().is_empty())
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        },
+        git_tools: req.git_tools,
         engine: normalize_docgen_engine(&req.engine, &channel_engine),
         tianji_agent: req.agent,
         workspace,
     };
+    // 保存时就拦下「文档目录不在工作区内」的配置矛盾，别等调度跑到一半才失败。
+    crate::wecom_docgen::validate_config_paths(&docgen.workspace, &docgen.doc_dir)?;
     // 文档更新那套 DSH 引擎也在这里对齐（模型/思考强度留空表示沿用，前端已解析）。
     if docgen.uses_dsh() && !docgen.workspace.trim().is_empty() {
         let _ = runtime
@@ -932,7 +1037,9 @@ pub async fn wecom_docgen_apply(
                 req.dsh_effort.trim().to_string(),
             )
             .await;
-        runtime.docgen_dsh.set_mcp(Vec::new()).await;
+        // MCP 默认关；开启时只下发用户勾选的服务（服务级白名单，fail-closed）。
+        // 只读 git 是内置能力（受 git_tools 控制），不占用户白名单。
+        runtime.docgen_dsh.set_mcp(effective_docgen_mcp(&docgen)).await;
     }
     *runtime.docgen.lock().await = docgen;
     crate::wecom_log::write("docgen", "config applied from reverse-doc page");
@@ -1376,6 +1483,9 @@ async fn apply_one_bot(
     }
 
     // Webhooks were decoded during validation, before any retirement/mutation.
+    // 技能与 MCP 只在「逆向工程」页配置，IM 机器人页保存时不带这两个字段 → 保留原值，
+    // 避免从 IM 页点保存把逆向工程的技能/MCP 白名单悄悄清空。
+    let prev_docgen = runtime.docgen.lock().await.clone();
     *runtime.docgen.lock().await = crate::wecom_docgen::DocgenConfig {
         enabled: req.auto_update_enabled,
         time: req.auto_update_time.trim().to_string(),
@@ -1405,6 +1515,10 @@ async fn apply_one_bot(
         repo_allowlist: normalize_repo_allowlist(&req.docgen_repo_allowlist, &docgen_workspace),
         system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_system_prompt),
         quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_quality_prompt),
+        doc_skill: prev_docgen.doc_skill.clone(),
+        mcp_enabled: prev_docgen.mcp_enabled,
+        mcp_specs: prev_docgen.mcp_specs.clone(),
+        git_tools: prev_docgen.git_tools,
         engine: normalize_docgen_engine(&req.docgen_engine, &engine),
         tianji_agent: req.docgen_agent,
     };
@@ -1437,7 +1551,8 @@ async fn apply_one_bot(
             docgen_dsh_effort,
         )
         .await;
-    runtime.docgen_dsh.set_mcp(Vec::new()).await;
+    // MCP 沿用「逆向工程」页配置的白名单（默认关 = 空）+ 内置只读 git。
+    runtime.docgen_dsh.set_mcp(effective_docgen_mcp(&prev_docgen)).await;
 
     if !req.enabled {
         if delta.retire {
