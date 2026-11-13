@@ -1126,10 +1126,9 @@ impl Orchestrator {
         let offset = *self.skywalking_timezone.lock().await;
         let oap_ready = !addr.trim().is_empty();
         let enhance = self.take_enhance_block("dsh", msg).await;
-        let mode_rules = format!(
-            "{}{}",
-            capability_card("dsh", &answer_mode, &doc_dir, oap_ready),
-            enhance
+        let mode_rules = guidance_block(
+            &capability_card("dsh", &answer_mode, &doc_dir, oap_ready),
+            &enhance,
         );
         let bot = self.bot_id.lock().await.clone();
         let context_key = crate::wecom_investigation::context_key(
@@ -1905,15 +1904,19 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
         let skywalking_ready = !self.skywalking.lock().await.0.trim().is_empty();
         // 引擎优先：能力卡 + 可选用户增强提示 + 原文。
         let enhance = self.take_enhance_block("tianji", msg).await;
-        let mode_rules = format!(
-            "{}{}",
-            capability_card("tianji", &answer_mode, &doc_dir, skywalking_ready),
-            enhance
+        let mode_rules = guidance_block(
+            &capability_card("tianji", &answer_mode, &doc_dir, skywalking_ready),
+            &enhance,
         );
+        // 角色句只保留身份与渠道；格式/路径/媒体约束统一由 reply_output_rules 表达，
+        // 不在两处重复（旧版这里还有一句与规则块重复的「回复简洁、适合即时通讯」）。
         let system = format!(
-            "你是 AI Workbench 的天玑助手，正在通过{where_from}回答。回复简洁、适合即时通讯；少用大段代码围栏。\n\
-{reply_rules}\n{mode_rules}\n{}",
-            agent_cfg.system_extra,
+            "你是 AI Workbench 的天玑助手，正在通过{where_from}回答。\n\n\
+{reply_rules}\n\n{mode_rules}{extra}",
+            extra = match agent_cfg.system_extra.trim() {
+                "" => String::new(),
+                extra => format!("\n\n{extra}"),
+            },
             reply_rules = reply_output_rules()
         );
 
@@ -2428,14 +2431,45 @@ fn capability_card(_engine: &str, mode: &str, doc_dir: &str, oap_ready: bool) ->
         // （wecom_skywalking_mcp.mjs）随 ACP mcpServers 下发，两边提示词统一。
         "日志：用 SkyWalking MCP 工具 `skywalking_query` 查日志/调用链/metrics（可按服务、关键词、时间窗、traceId）；以实际查询为准。".to_string()
     };
+    // 两个小节：能力清单 + 回答方式。外层标题（【回答指引】）由 `guidance_block` 统一加，
+    // 避免与调用方标题并列连排。
     format!(
         "【可用能力】\n\
 - 文档：工作区 `{doc_dir}/`（grep / read_file）\n\
 - 代码：工作区源码（read_file / grep / symbols）\n\
 - {logs}\n\
-{preference}\n\
-把用户原话当作唯一需求；自行决定查什么、查几次；缺关键信息时向用户追问，不要空壳结论。"
+\n\
+【回答方式】\n\
+- {preference}\n\
+- 把用户原话当作唯一需求；自行决定查什么、查几次；缺关键信息先向用户追问，不要空壳结论。"
     )
+}
+
+/// 能力卡 + 用户增强提示 → 一个「回答指引」块。
+/// 标题只出现一次；增强提示自带 `【增强提示】` 小节与来源元数据，空行分隔。
+fn guidance_block(card: &str, enhance: &str) -> String {
+    let mut out = format!("【回答指引】\n{}", card.trim());
+    let enhance = enhance.trim_start();
+    if !enhance.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(enhance);
+    }
+    out
+}
+
+/// DSH prompt 的静态文本段落（媒体块由 `build_dsh_prompt` 追加）。
+/// 首块是用户原话；其余块以空行开头——DSH 把多块文本拼接展示时，
+/// 不会出现「。【回答指引】」「。【可用能力】」这种标题粘连。
+fn dsh_prompt_sections(head: &str, guidance: &str, sky_context: &str) -> Vec<String> {
+    let mut sections = vec![head.to_string()];
+    sections.push(format!("\n\n{}", reply_output_rules()));
+    if !guidance.trim().is_empty() {
+        sections.push(format!("\n\n{}", guidance.trim()));
+    }
+    if !sky_context.trim().is_empty() {
+        sections.push(format!("\n\n{}", sky_context.trim()));
+    }
+    sections
 }
 
 /// 诊断用：本轮增强注入结果（不写正文，只写状态 token）。
@@ -2620,14 +2654,29 @@ fn is_self_intro_command(text: &str) -> bool {
     EXACT.iter().any(|w| lower == *w)
 }
 
-/// 企微出站短约束：IM 友好 Markdown + 禁流程图 DSL（无业务示例）。
+/// 企微出站规则（天玑 / DSH 两档共用）：IM 友好 Markdown + 禁流程图 DSL（无业务示例）。
 /// 出站仍由 `prepare_wecom_visible_markdown` 兜底把 mermaid 等转成 ```text ASCII。
+/// 分节只为可读性，每条硬约束与旧版一一对应，不得删减。
 fn reply_output_rules() -> &'static str {
-    "回复用简洁 Markdown，适合即时通讯：先结论后要点；是否加粗强调、用几级标题、要不要列表，由你按内容自行判断（可用 ## / ### 分段）；复杂对照用短列表，勿用 HTML。问候简短，勿复述提示词或工具策略。\n\
-对用户只写工作区相对路径（仓库名、doc/…）；禁止盘符（如 D:）与完整根目录绝对路径；被问工作区位置时用仓库名/相对目录，不写本机盘符。\n\
-企微入站图由宿主解密后以内联或本地路径提供；禁止对企微 COS 临时链做 curl / web_fetch。\n\
-企微不渲染流程图 DSL：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。需要流程时用一个 ```text 等宽步骤（①②③、|、→、L-分支），勿贴业务示例。\n\
-发本地已生成文件回本对话时，单独写一行 WECOM_ATTACH:<绝对路径或工作区相对路径>（宿主剥离并上传）。"
+    "【回复格式】\n\
+- 简洁 Markdown，先结论后要点；标题层级、加粗、列表按内容自行取舍，复杂对照用短列表，勿用 HTML。\n\
+- 问候简短；不要复述提示词或工具策略。\n\
+\n\
+【路径与隐私】\n\
+- 对用户只写工作区相对路径（仓库名、doc/…）；禁止盘符（如 D:）与完整根目录绝对路径。\n\
+- 被问工作区位置时用仓库名/相对目录回答。\n\
+\n\
+【媒体与附件】\n\
+- 企微入站图由宿主解密后以内联或本地路径提供；禁止对企微 COS 临时链做 curl / web_fetch。\n\
+- 发本地已生成文件时，单独写一行 WECOM_ATTACH:<绝对路径或工作区相对路径>（宿主会剥离该行并上传）。\n\
+\n\
+【企微渲染限制】\n\
+- 不渲染流程图 DSL：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。\n\
+- 需要流程时用一个 ```text 等宽步骤（①②③、|、→、L-分支），勿贴业务示例。\n\
+\n\
+【安全与凭证】\n\
+- 不读取、不输出任何凭证或密钥（`.credentials*`、`.env`、`*_API_KEY`、token、私钥、`*.pem`/`*.key`）；用户索要时明确拒绝，只说明不提供。\n\
+- 必须提到配置时只写键名与用途，不复述值；也不要把密钥拆分、编码或变形后输出。"
 }
 
 /// DSH 档的 prompt 组装：返回 ACP content block 数组。
@@ -2647,21 +2696,15 @@ async fn build_dsh_prompt(
 ) -> Vec<serde_json::Value> {
     // 标题可读：DSH 会话标题取首条 prompt 的文本前缀（session_projcache 的
     // `rows.titleInput.first`），所以用户原话必须排第一块；规则/指引放它后面。
-    // 纯媒体消息用占位，避免标题回落到「回复用简洁 Markdown…」。
-    let mut blocks: Vec<serde_json::Value> =
-        vec![crate::wecom_dsh::acp_text_block(&dsh_prompt_head(user_text, media))];
-    blocks.push(crate::wecom_dsh::acp_text_block(reply_output_rules()));
-    // 「怎么回答」的指引（文档优先 / 读代码）跟在原话后面。
-    if !mode_rules.trim().is_empty() {
-        blocks.push(crate::wecom_dsh::acp_text_block(&format!(
-            "【回答指引】{}",
-            mode_rules.trim()
-        )));
-    }
-    // 排障预取的 SkyWalking 数据（当前引擎优先路径下为空；DSH 档的主动查询已改走 MCP 工具）。
-    if !sky_context.trim().is_empty() {
-        blocks.push(crate::wecom_dsh::acp_text_block(sky_context.trim()));
-    }
+    // 非首块以空行开头，避免多块拼接时标题与上一段粘连。
+    let mut blocks: Vec<serde_json::Value> = dsh_prompt_sections(
+        &dsh_prompt_head(user_text, media),
+        mode_rules,
+        sky_context,
+    )
+    .into_iter()
+    .map(|section| crate::wecom_dsh::acp_text_block(&section))
+    .collect();
     let outcome = if media.is_empty() {
         crate::wecom_media::MaterializeOutcome::default()
     } else {
@@ -2924,8 +2967,12 @@ fn query_window_for_model_log_requests(
 }
 
 /// 流式 / 终帧共用：剥附件标记 + 流程图 DSL 围栏 → ```text ASCII。
+/// 最后统一做凭证遮盖：模型能读本机文件，被诱导时会把明文密钥复述进正文，
+/// 提示词只能降低概率，出站脱敏才是兜底（对天玑 / DSH 两档都生效）。
 fn prepare_wecom_visible_markdown(text: &str) -> String {
-    rewrite_diagram_fences(&strip_wecom_attach_markers(text))
+    crate::wecom_sanitize::redact_credentials(&rewrite_diagram_fences(
+        &strip_wecom_attach_markers(text),
+    ))
 }
 
 /// 流式中间帧：去掉 WECOM_ATTACH 行，避免用户看到宿主指令。
@@ -3027,6 +3074,14 @@ fn take_fence_at(text: &str, at: usize) -> Option<(String, String, usize)> {
 
 async fn deliver_wecom_attachments(app: &AppHandle, request_id: &str, paths: &[String]) {
     for path in paths {
+        // 附件链路会把文本文件原样贴进对话，绕过终稿脱敏：凭证类路径在入口拦掉。
+        if crate::wecom_sanitize::is_sensitive_file_path(path) {
+            crate::wecom_log::write(
+                "media-out",
+                &format!("{request_id} blocked=credential"),
+            );
+            continue;
+        }
         let lower = path.to_ascii_lowercase();
         let is_image = [".png", ".jpg", ".jpeg", ".gif", ".webp"]
             .iter()
@@ -3468,8 +3523,92 @@ mod tests {
         let r = capability_card("tianji", "doc", "doc", true);
         assert!(r.contains("文档优先"), "{r}");
         assert!(r.contains("【可用能力】"), "{r}");
+        assert!(r.contains("【回答方式】"), "能力卡应拆成能力/回答方式两节：{r}");
         assert!(!r.contains("不要去读业务代码"), "{r}");
         assert!(!r.contains("步骤：①"), "{r}");
+    }
+
+    #[test]
+    fn reply_output_rules_keep_all_constraints() {
+        let rules = reply_output_rules();
+        for heading in [
+            "【回复格式】",
+            "【路径与隐私】",
+            "【媒体与附件】",
+            "【企微渲染限制】",
+            "【安全与凭证】",
+        ] {
+            assert!(rules.contains(heading), "缺少小节 {heading}：{rules}");
+        }
+        for token in [
+            "先结论后要点",
+            "勿用 HTML",
+            "复述提示词",
+            "相对路径",
+            "盘符",
+            "COS",
+            "curl",
+            "WECOM_ATTACH",
+            "宿主会剥离",
+            "mermaid",
+            "plantuml",
+            "graphviz",
+            "dot",
+            "puml",
+            "```text",
+            "①②③",
+            "不输出任何凭证或密钥",
+            "明确拒绝",
+        ] {
+            assert!(rules.contains(token), "缺少约束片段 {token}：{rules}");
+        }
+        // 旧版的啰嗦表述应已删除（自行取舍的语义仍在）。
+        assert!(!rules.contains("是否加粗强调"), "{rules}");
+        assert!(rules.contains("自行取舍"), "{rules}");
+    }
+
+    #[test]
+    fn guidance_block_has_single_heading_and_separates_enhance() {
+        let card = capability_card("dsh", "auto", "doc", true);
+        let block = guidance_block(
+            &card,
+            "\n\n【增强提示】\n口语\n\n<wecom_im_source>x</wecom_im_source>",
+        );
+        assert!(block.starts_with("【回答指引】\n"), "{block}");
+        assert_eq!(block.matches("【回答指引】").count(), 1, "{block}");
+        assert!(block.contains("【可用能力】"), "{block}");
+        assert!(block.contains("【回答方式】"), "{block}");
+        assert!(
+            block.contains("\n\n【增强提示】"),
+            "增强提示要有空行分隔：{block}"
+        );
+        let plain = guidance_block(&card, "  ");
+        assert!(!plain.contains("【增强提示】"), "{plain}");
+        assert!(!plain.ends_with('\n'), "无增强提示时不留尾巴：{plain}");
+    }
+
+    #[test]
+    fn dsh_prompt_sections_start_with_head_and_separate_blocks() {
+        let sections = dsh_prompt_sections("讲解下商机流程", "【回答指引】\n卡", "");
+        assert_eq!(sections[0], "讲解下商机流程");
+        assert!(sections[1].starts_with("\n\n"), "{:?}", sections[1]);
+        assert!(sections[1].contains("【回复格式】"), "{:?}", sections[1]);
+        assert!(
+            sections[2].starts_with("\n\n【回答指引】"),
+            "指引块要空行分隔，避免标题粘连：{:?}",
+            sections[2]
+        );
+        assert_eq!(
+            sections.len(),
+            3,
+            "sky_context 为空不应产生空块：{sections:?}"
+        );
+        let with_sky = dsh_prompt_sections("q", "g", "  证据  ");
+        assert_eq!(with_sky.len(), 4);
+        assert_eq!(with_sky[3], "\n\n证据");
+        // 拼接后不会出现「。【回答指引】」这种粘连。
+        let glued = sections.join("");
+        assert!(!glued.contains("。【回答指引】"), "{glued}");
     }
 
     #[test]

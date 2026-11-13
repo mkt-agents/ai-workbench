@@ -132,6 +132,9 @@ pub async fn send_image(
     path: &str,
     request_id: &str,
 ) -> Result<String, String> {
+    if crate::wecom_sanitize::is_sensitive_file_path(path) {
+        return Err("拒绝发送凭证类文件（安全策略）".into());
+    }
     let (sock, req_id, stream_id) = target_sock(app, request_id).await?;
     let name = file_name(path);
     let bytes = tokio::fs::read(path)
@@ -153,6 +156,9 @@ pub async fn send_file(
     path: &str,
     request_id: &str,
 ) -> Result<String, String> {
+    if crate::wecom_sanitize::is_sensitive_file_path(path) {
+        return Err("拒绝发送凭证类文件（安全策略）".into());
+    }
     let (sock, req_id, stream_id) = target_sock(app, request_id).await?;
     let name = file_name(path);
     let bytes = tokio::fs::read(path)
@@ -160,10 +166,12 @@ pub async fn send_file(
         .map_err(|e| format!("读取文件失败：{e}"))?;
 
     if let Ok(text) = std::str::from_utf8(&bytes) {
+        // 文本文件是原样贴进对话的：先脱敏再截断，避免密钥随附件外发。
+        let text = crate::wecom_sanitize::redact_credentials(text);
         let preview: String = if text.chars().count() > 4000 {
             format!("{}\n…(已截断)", text.chars().take(4000).collect::<String>())
         } else {
-            text.to_string()
+            text
         };
         sock.send_raw(wecom_proto::respond_stream(
             &req_id,

@@ -51,15 +51,36 @@ fn tool_label(head: &str) -> Option<&'static str> {
         "symbols" => "查符号",
         "task" => "子任务",
         "plan" | "update_plan" | "todo" | "todowrite" => "更新计划",
+        "skywalking_query" | "skywalking" => "查日志",
         "mcp" => "外部工具",
         _ => return None,
     })
 }
 
 /// 把已清洗的 hint 翻成展示术语：整体命中或首词命中皆可，其余部分原样保留。
+/// MCP 工具名（`mcp__server__tool` / `mcp_server_tool`）只展示工具用途，
+/// 不把协议名丢给企微用户——否则会出现 `mcp__skywalking__skywalking_query`
+/// 这类又长又重复的中段。
 fn display_hint(cleaned: &str) -> String {
     if let Some(label) = tool_label(cleaned) {
         return label.to_owned();
+    }
+    if let Some(rest) = cleaned.strip_prefix("mcp__") {
+        // DSH 形态：`mcp__<server>__<tool>`，后面可能跟描述。
+        let name = rest.split_whitespace().next().unwrap_or(rest);
+        let tool = name.split_once("__").map_or(name, |(_, tool)| tool);
+        if let Some(label) = tool_label(tool) {
+            return label.to_owned();
+        }
+        return "外部工具".to_owned();
+    }
+    if cleaned.starts_with("mcp_") {
+        // 宿主侧天玑的 `mcp_<server>_<tool>`：下划线无法可靠拆分服务名，
+        // 只认已知工具名后缀，其余统一兜底。
+        if cleaned.contains("skywalking_query") {
+            return "查日志".to_owned();
+        }
+        return "外部工具".to_owned();
     }
     match cleaned.split_once(' ') {
         Some((head, rest)) => match tool_label(head) {
@@ -736,6 +757,30 @@ mod tests {
         assert!(pulse.starts_with(THINKING_HINT), "{pulse}");
         assert!(!PULSE_VERBS.iter().any(|v| pulse.contains(v)), "{pulse}");
         assert!(pulse.contains("已用时 30秒…"), "{pulse}");
+    }
+
+    /// MCP 工具名只展示用途，不暴露协议名；未知工具兜底「外部工具」。
+    #[test]
+    fn mcp_tool_names_use_short_labels() {
+        assert_eq!(display_hint("mcp__skywalking__skywalking_query"), "查日志");
+        assert_eq!(
+            display_hint("mcp__skywalking__skywalking_query 查最近 4 小时日志"),
+            "查日志"
+        );
+        assert_eq!(display_hint("mcp_skywalking_skywalking_query"), "查日志");
+        assert_eq!(display_hint("skywalking_query"), "查日志");
+        assert_eq!(display_hint("mcp__filesystem__read_file"), "读文件");
+        assert_eq!(display_hint("mcp__unknown__do_thing"), "外部工具");
+        // 内联文案不受影响。
+        assert_eq!(display_hint("grep src/lib.rs"), "搜索内容 src/lib.rs");
+
+        let mut state = State::default();
+        state.begin("s", "wecom-preflight-mcp", at(0));
+        state.hint("wecom-mcp", "mcp__skywalking__skywalking_query", at(1));
+        let pulse = state.bubble_pulse("wecom-mcp", at(30)).expect("pulse");
+        assert!(pulse.contains("查日志"), "{pulse}");
+        assert!(!pulse.contains("mcp__"), "气泡不应暴露协议名：{pulse}");
+        assert!(!pulse.contains("skywalking__"), "{pulse}");
     }
 
     #[test]
