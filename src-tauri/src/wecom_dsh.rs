@@ -30,6 +30,9 @@ const PROTOCOL_VERSION: u64 = 1;
 /// 首次初始化 profile 可能要装依赖，所以给得比普通 RPC 宽。
 const INIT_TIMEOUT: Duration = Duration::from_secs(120);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
+/// 会话创建失败熔断窗口：同一（工作区 + MCP 配置）在这段时间内只尝试一次
+/// `session/new`。DSH 每次失败的创建都会在磁盘留一个空壳会话。
+const NEW_SESSION_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
 const STDERR_TAIL_LINES: usize = 24;
 
 /// 渠道权限档位 → DSH 沙箱 mode + 审批 policy。
@@ -333,6 +336,9 @@ pub struct DshEngine {
     inner: Mutex<EngineInner>,
     /// 同一时刻只允许一个启动流程，避免两条消息各起一个 node。
     start_lock: Mutex<()>,
+    /// 会话创建失败熔断：同一（工作区 + MCP 配置）在 30 秒内只尝试一次 `session/new`。
+    /// DSH 在 `session/new` 里先落盘会话再校验参数，每次确定性失败都会留一个空壳。
+    new_gate: SessionNewGate,
     /// 落盘命名空间：通道用空串（`sessions.json`）；多 bot 时为 `bot-{id}` / `docgen-{id}`。
     tag: String,
 }
@@ -373,6 +379,7 @@ impl DshEngine {
                 image_prompt: false,
             }),
             start_lock: Mutex::new(()),
+            new_gate: SessionNewGate::default(),
         }
     }
 
@@ -724,13 +731,16 @@ impl DshEngine {
         };
         // Even reuse requires a live current runtime, never just a persisted mapping.
         let (shared, writer) = self.parts().await?;
-        let (id, action) = acquire_rpc_session(
+        // 熔断按（工作区 + MCP 配置）指纹生效：配置一改就立刻放行，30 秒后自动失效。
+        let fingerprint = session_config_fingerprint(&workspace, &mcp_servers);
+        let (id, action) = acquire_rpc_session_gated(
             &shared,
             &writer,
             &workspace,
             mcp_servers,
             existing.as_deref(),
             validated,
+            Some((&self.new_gate, fingerprint.as_str())),
         )
         .await?;
         let entry = {
@@ -743,6 +753,21 @@ impl DshEngine {
         };
         if action == "new" {
             self.persist_sessions().await;
+            // DSH UI 的「按工作区」分组只认 workspace.json 里的 sessionIds 白名单；
+            // ACP 只传 cwd，这里补一次登记（best-effort：失败只写日志，不影响回合）。
+            let outcome = crate::dsh_workspace_registry::register_session(&workspace, &id);
+            crate::wecom_log::write(
+                "dsh-workspace",
+                &format!(
+                    "session={} outcome={}{}",
+                    id,
+                    outcome.token(),
+                    outcome
+                        .detail()
+                        .map(|detail| format!(" detail={detail}"))
+                        .unwrap_or_default()
+                ),
+            );
         }
         // JSON escaping prevents control characters in an opaque session id forging log lines.
         crate::wecom_log::write(
@@ -1018,6 +1043,29 @@ async fn acquire_rpc_session(
     existing: Option<&str>,
     validated: bool,
 ) -> Result<(String, &'static str), String> {
+    acquire_rpc_session_gated(
+        shared,
+        writer,
+        workspace,
+        mcp_servers,
+        existing,
+        validated,
+        None,
+    )
+    .await
+}
+
+/// `gate` =（熔断状态, 当前配置指纹）。`session/new` 前的确定性配置错误会被记住，
+/// 30 秒内同一配置不再重试——每次失败的 `session/new` 都会在 DSH 侧留一个空壳会话。
+async fn acquire_rpc_session_gated(
+    shared: &Arc<RuntimeShared>,
+    writer: &mpsc::UnboundedSender<Value>,
+    workspace: &str,
+    mcp_servers: Value,
+    existing: Option<&str>,
+    validated: bool,
+    gate: Option<(&SessionNewGate, &str)>,
+) -> Result<(String, &'static str), String> {
     if let Some(id) = existing {
         if validated {
             return Ok((id.into(), "reuse"));
@@ -1045,20 +1093,150 @@ async fn acquire_rpc_session(
             Err(error) => return Err(format!("session/resume 失败：{}", error.text())),
         }
     }
-    let created = rpc_call(
+    if let Some((gate, fingerprint)) = gate {
+        if let Some(message) = gate.blocked(fingerprint) {
+            crate::wecom_log::write(
+                "dsh-session-action",
+                "new-blocked reason=deterministic_config",
+            );
+            return Err(format!(
+                "DSH 会话创建已熔断（同一配置 30 秒内不重复尝试，避免在 DSH 侧堆积空会话）：{message}"
+            ));
+        }
+    }
+    let created = match rpc_call_typed(
         shared,
         writer,
         "session/new",
         json!({ "cwd": workspace, "mcpServers": mcp_servers }),
         SESSION_TIMEOUT,
     )
-    .await?;
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            if let Some((gate, fingerprint)) = gate {
+                if classify_new_session_failure(&error) == NewSessionFailure::DeterministicConfig {
+                    gate.record(fingerprint, &error.text());
+                }
+            }
+            return Err(format!("session/new 失败：{}", error.text()));
+        }
+    };
+    if let Some((gate, _)) = gate {
+        gate.clear();
+    }
     let id = created
         .get("sessionId")
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
         .ok_or_else(|| "DSH 没有返回 sessionId".to_string())?;
     Ok((id.into(), "new"))
+}
+
+/// 会话创建失败的 30 秒熔断状态：同一（工作区 + MCP 配置）指纹只记住最近一次
+/// 确定性失败，30 秒后或配置变化自动失效。
+#[derive(Default)]
+pub(crate) struct SessionNewGate {
+    state: StdMutex<Option<NewSessionFailureMemo>>,
+}
+
+struct NewSessionFailureMemo {
+    fingerprint: String,
+    message: String,
+    at: std::time::Instant,
+}
+
+impl SessionNewGate {
+    fn blocked(&self, fingerprint: &str) -> Option<String> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(memo) = state.as_ref() else {
+            return None;
+        };
+        if memo.fingerprint != fingerprint {
+            // 配置变了：旧失败不能代表这次输入。
+            return None;
+        }
+        if memo.at.elapsed() < NEW_SESSION_FAILURE_COOLDOWN {
+            return Some(memo.message.clone());
+        }
+        *state = None;
+        None
+    }
+
+    fn record(&self, fingerprint: &str, message: &str) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *state = Some(NewSessionFailureMemo {
+            fingerprint: fingerprint.to_string(),
+            message: message.to_string(),
+            at: std::time::Instant::now(),
+        });
+    }
+
+    fn clear(&self) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *state = None;
+    }
+}
+
+/// 确定性配置错误才熔断；`cwd does not match` 属于"旧映射该重建"的正常分支。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewSessionFailure {
+    /// 参数级错误（-32602 且指向 mcpServers / invalid params）：同一配置重试必然再失败。
+    DeterministicConfig,
+    /// 进程/传输层瞬时错误：不熔断，下一条消息可以再试。
+    TransientInternal,
+    Other,
+}
+
+fn classify_new_session_failure(error: &RpcFailure) -> NewSessionFailure {
+    let RpcFailure::Remote(err) = error else {
+        return NewSessionFailure::TransientInternal;
+    };
+    let message = err
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let code = err.get("code").and_then(Value::as_i64);
+    // 旧映射指向别的工作区：session/new 是正确后续，不能熔断。
+    if message.contains("cwd does not match") {
+        return NewSessionFailure::Other;
+    }
+    if code == Some(-32602)
+        && (message.contains("invalid params")
+            || message.contains("mcpservers")
+            || message.contains("additionaldirectories"))
+    {
+        return NewSessionFailure::DeterministicConfig;
+    }
+    if code == Some(-32603) || message.contains("internal error") {
+        return NewSessionFailure::TransientInternal;
+    }
+    NewSessionFailure::Other
+}
+
+/// 熔断指纹：工作区 + 序列化后的 MCP 配置。配置一变化（如修好 MCP 参数），
+/// 指纹随之变化，立即放行新的 session/new。
+fn session_config_fingerprint(workspace: &str, mcp_servers: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(workspace.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(mcp_servers.to_string().as_bytes());
+    hasher.finalize()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Debug)]
@@ -2188,6 +2366,108 @@ mod tests {
         task.abort();
     }
 
+    #[test]
+    fn new_session_failure_classification() {
+        let remote = |value: Value| RpcFailure::Remote(value);
+        assert_eq!(
+            classify_new_session_failure(&remote(json!({
+                "code": -32602,
+                "message": "Invalid params: mcpServers[0].command must be an absolute path"
+            }))),
+            NewSessionFailure::DeterministicConfig
+        );
+        // 旧映射指向别的工作区：重建会话是正确后续，不能熔断。
+        assert_eq!(
+            classify_new_session_failure(&remote(json!({
+                "code": -32602,
+                "message": "Invalid params: session cwd does not match: D:\\code"
+            }))),
+            NewSessionFailure::Other
+        );
+        assert_eq!(
+            classify_new_session_failure(&remote(json!({
+                "code": -32603,
+                "message": "Internal error"
+            }))),
+            NewSessionFailure::TransientInternal
+        );
+        assert_eq!(
+            classify_new_session_failure(&RpcFailure::Transport("channel closed".into())),
+            NewSessionFailure::TransientInternal
+        );
+        // session/new 的参数级错误都是确定性的：同一配置重试必然再失败。
+        assert_eq!(
+            classify_new_session_failure(&remote(json!({
+                "code": -32602,
+                "message": "Invalid params: unknown config option"
+            }))),
+            NewSessionFailure::DeterministicConfig
+        );
+        // 与参数/MCP 无关的 -32602 不熔断。
+        assert_eq!(
+            classify_new_session_failure(&remote(json!({
+                "code": -32602,
+                "message": "Bad request"
+            }))),
+            NewSessionFailure::Other
+        );
+    }
+
+    #[tokio::test]
+    async fn deterministic_new_failure_is_cooled_down_for_the_same_config() {
+        let (shared, writer, calls, task) = mock_rpc(vec![
+            json!({"error":{"code":-32602,"message":"Invalid params: mcpServers[0].command must be an absolute path"}}),
+            json!({"result":{"sessionId":"fresh"}}),
+        ]);
+        let gate = SessionNewGate::default();
+        let fingerprint = session_config_fingerprint("D:/fixture", &json!([]));
+        let first = acquire_rpc_session_gated(
+            &shared,
+            &writer,
+            "D:/fixture",
+            json!([]),
+            None,
+            false,
+            Some((&gate, fingerprint.as_str())),
+        )
+        .await;
+        let error = first.unwrap_err();
+        assert!(error.contains("mcpServers[0]"), "{error}");
+        // 同一配置 30 秒内不再发 session/new：每次失败都会在 DSH 侧留一个空壳。
+        let second = acquire_rpc_session_gated(
+            &shared,
+            &writer,
+            "D:/fixture",
+            json!([]),
+            None,
+            false,
+            Some((&gate, fingerprint.as_str())),
+        )
+        .await;
+        assert!(second.unwrap_err().contains("熔断"));
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        // 配置指纹一变（例如修好 MCP 参数）立即放行。
+        let changed = session_config_fingerprint(
+            "D:/fixture",
+            &json!([{"name":"skywalking","command":"C:\\node.exe","args":"a b"}]),
+        );
+        assert_ne!(changed, fingerprint);
+        let third = acquire_rpc_session_gated(
+            &shared,
+            &writer,
+            "D:/fixture",
+            json!([]),
+            None,
+            false,
+            Some((&gate, changed.as_str())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(third, ("fresh".into(), "new"));
+        assert_eq!(calls.lock().unwrap().len(), 2);
+        task.abort();
+    }
+
     #[tokio::test]
     async fn reset_is_key_local_and_next_acquisition_is_new() {
         let (shared, writer, calls, task) = mock_rpc(vec![json!({"result":{"sessionId":"fresh"}})]);
@@ -2451,6 +2731,7 @@ mod tests {
                 image_prompt: false,
             }),
             start_lock: Mutex::new(()),
+            new_gate: SessionNewGate::default(),
             tag: String::new(),
         }
     }

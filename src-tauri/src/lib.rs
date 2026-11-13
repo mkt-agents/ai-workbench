@@ -79,6 +79,7 @@ mod harness_config;
 mod agent_sys;
 mod secret_protect;
 mod dsh_commands;
+mod dsh_workspace_registry;
 mod runtime_commands;
 mod cloudflared_commands;
 mod update_commands;

@@ -1259,7 +1259,7 @@ impl Orchestrator {
         drop(session_phase);
         // 引擎优先：不做宿主抽词/预查/规划循环/核验报告短路；日志查询由 DSH 进程内
         // 的 MCP 客户端调用 skywalking_query 完成（查询逻辑与预算在 MCP server 里）。
-        let mut log_evidence = String::new();
+        let log_evidence = String::new();
         let budget = crate::wecom_skywalking::QueryBudget::new();
         outcome.budget = budget;
         outcome.source_ready = oap_ready;
@@ -1278,8 +1278,8 @@ impl Orchestrator {
 
         let protected_answer = false;
         let answer_level = "unknown".to_string();
-        let mut has_evidence = false;
-        let mut store = crate::wecom_evidence_store::EvidenceStore::new();
+        let has_evidence = false;
+        let store = crate::wecom_evidence_store::EvidenceStore::new();
         let bot = self.bot_id.lock().await.clone();
         let prompt_blocks = build_dsh_prompt(
             app,
@@ -2645,8 +2645,13 @@ async fn build_dsh_prompt(
     mode_rules: &str,
     sky_context: &str,
 ) -> Vec<serde_json::Value> {
-    let mut blocks: Vec<serde_json::Value> = vec![crate::wecom_dsh::acp_text_block(reply_output_rules())];
-    // 先放一条「怎么回答」的指引（文档优先 / 读代码），再放用户问题。
+    // 标题可读：DSH 会话标题取首条 prompt 的文本前缀（session_projcache 的
+    // `rows.titleInput.first`），所以用户原话必须排第一块；规则/指引放它后面。
+    // 纯媒体消息用占位，避免标题回落到「回复用简洁 Markdown…」。
+    let mut blocks: Vec<serde_json::Value> =
+        vec![crate::wecom_dsh::acp_text_block(&dsh_prompt_head(user_text, media))];
+    blocks.push(crate::wecom_dsh::acp_text_block(reply_output_rules()));
+    // 「怎么回答」的指引（文档优先 / 读代码）跟在原话后面。
     if !mode_rules.trim().is_empty() {
         blocks.push(crate::wecom_dsh::acp_text_block(&format!(
             "【回答指引】{}",
@@ -2656,10 +2661,6 @@ async fn build_dsh_prompt(
     // 排障预取的 SkyWalking 数据（当前引擎优先路径下为空；DSH 档的主动查询已改走 MCP 工具）。
     if !sky_context.trim().is_empty() {
         blocks.push(crate::wecom_dsh::acp_text_block(sky_context.trim()));
-    }
-    let text = user_text.trim();
-    if !text.is_empty() {
-        blocks.push(crate::wecom_dsh::acp_text_block(text));
     }
     let outcome = if media.is_empty() {
         crate::wecom_media::MaterializeOutcome::default()
@@ -2712,11 +2713,32 @@ async fn build_dsh_prompt(
             &crate::wecom_media::media_fetch_failure_text(&outcome.errors),
         ));
     }
-    // ACP 不接受空 prompt：既无文字也无可内联媒体时补一个占位，交给上游的空消息兜底。
-    if blocks.is_empty() {
-        blocks.push(crate::wecom_dsh::acp_text_block(user_text));
-    }
     blocks
+}
+
+/// DSH prompt 的第一块（决定会话标题）：用户原话优先；纯媒体消息给可读占位。
+fn dsh_prompt_head(user_text: &str, media: &[wecom_proto::MediaRef]) -> String {
+    let text = user_text.trim();
+    if !text.is_empty() {
+        return text.to_string();
+    }
+    if media.is_empty() {
+        return "（空消息）".to_string();
+    }
+    let images = media.iter().filter(|item| item.kind == "image").count();
+    let names: Vec<&str> = media
+        .iter()
+        .filter(|item| item.kind != "image")
+        .filter_map(|item| item.filename.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    match (images, names.is_empty()) {
+        (0, true) => "（文件附件）".to_string(),
+        (0, false) => format!("（文件附件：{}）", names.join("、")),
+        (count, true) => format!("（{count} 张图片附件）"),
+        (count, false) => format!("（{count} 张图片 + 文件附件：{}）", names.join("、")),
+    }
 }
 
 /// 把文字 + 图片/文件附件组装成一条用户消息（天玑档）。
@@ -3473,6 +3495,36 @@ mod tests {
         assert!(!tj.contains("步骤：①"), "{tj}");
         let no_oap = capability_card("tianji", "auto", "doc", false);
         assert!(no_oap.contains("日志查询不可用"), "{no_oap}");
+    }
+
+    #[test]
+    fn dsh_prompt_head_prefers_user_text_for_titles() {
+        // DSH 标题取首条 prompt 文本前缀：用户原话必须原样排第一。
+        assert_eq!(dsh_prompt_head("  讲解下商机流程 ", &[]), "讲解下商机流程");
+        // 纯媒体消息给可读占位，别让标题回落到规则文案。
+        let image = crate::wecom_proto::MediaRef {
+            kind: "image".into(),
+            url: String::new(),
+            media_id: None,
+            filename: None,
+            aeskey: None,
+        };
+        assert_eq!(
+            dsh_prompt_head("", std::slice::from_ref(&image)),
+            "（1 张图片附件）"
+        );
+        let file = crate::wecom_proto::MediaRef {
+            kind: "file".into(),
+            url: String::new(),
+            media_id: None,
+            filename: Some("报价单.xlsx".into()),
+            aeskey: None,
+        };
+        assert_eq!(
+            dsh_prompt_head("", std::slice::from_ref(&file)),
+            "（文件附件：报价单.xlsx）"
+        );
+        assert_eq!(dsh_prompt_head("  ", &[]), "（空消息）");
     }
 
     #[test]
