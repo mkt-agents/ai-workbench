@@ -91,6 +91,7 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
   const { t } = useTranslation("ai");
   const invokeStartDsh = useGlobalStore((s) => s.invokeStartDsh);
   const invokeDshSetEmbed = useGlobalStore((s) => s.invokeDshSetEmbed);
+  const invokeDshEmbedReload = useGlobalStore((s) => s.invokeDshEmbedReload);
   const invokeStopDsh = useGlobalStore((s) => s.invokeStopDsh);
   const invokeListDsh = useGlobalStore((s) => s.invokeListDsh);
   const invokeCheckDshHttp = useGlobalStore((s) => s.invokeCheckDshHttp);
@@ -657,14 +658,26 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
         setActivePort(instance.port);
         setAuthUrl(instance.auth_url ?? null);
         setIsRunning(true);
-        setStatus(t("dsh.running"));
         if (instance.auth_patch_warning) showCriticalAlert(instance.auth_patch_warning);
         if (instance.auth_url) {
+          // The service is alive, so probing alone changes nothing on screen — this
+          // was the "refresh button does nothing" symptom. Reload the embedded page
+          // instead; that is what a refresh button is expected to do.
           setIframeLoading(false);
+          try {
+            await invokeDshEmbedReload();
+          } catch {
+            // The embed can be gone (page hidden or webview closed). Remounting the
+            // iframe keeps the click useful instead of surfacing an error.
+            autoReloadDoneRef.current = false;
+            remountIframe();
+          }
         } else {
           autoReloadDoneRef.current = false;
           remountIframe();
         }
+        setStatus(t("dsh.refreshed"));
+        clearStatusAfter(2000);
       } else {
         setAuthUrl(null);
         setIsRunning(false);
@@ -955,7 +968,9 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
                 <span
                   className={`dsh-status-dot ${isRunning ? "running" : ""} ${starting || installing || updating ? "busy" : ""}`}
                 />
-                {!isRunning && (
+                {/* Running normally shows only the dot; a transient status (refresh,
+                    stop failure) still needs a line, otherwise those clicks look dead. */}
+                {(!isRunning || status !== "") && (
                   <span className="dsh-status-text">{statusLabel}</span>
                 )}
               </div>

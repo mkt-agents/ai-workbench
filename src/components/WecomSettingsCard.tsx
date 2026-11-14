@@ -40,14 +40,17 @@ import {
   fetchDshModels,
   fetchWecomPairings,
   fetchWecomStatus,
+  fetchWecomWorkspaceSyncStatus,
   normalizeWecomMaxJobs,
   resolveWecomSkywalking,
   restartWecomChannel,
   revokeWecomUser,
   startWecomQr,
   pollWecomQr,
+  setWecomWorkspaceSyncEnabled,
   syncDshProfile,
   type WecomBotRuntimeStatus,
+  type WecomWorkspaceSyncStatus,
   type WecomPairing,
   type WecomStatus,
 } from "../lib/wecomChannel";
@@ -215,6 +218,9 @@ export default function WecomSettingsCard() {
   const [catalog, setCatalog] = useState<DshModelCatalog | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogError, setCatalogError] = useState("");
+  /** DSH 工作区实时同步（后端读取桌面端 patch 是否已注入，不落本应用设置） */
+  const [workspaceSync, setWorkspaceSync] = useState<WecomWorkspaceSyncStatus | null>(null);
+  const [workspaceSyncBusy, setWorkspaceSyncBusy] = useState(false);
   /** 小卡片 Tab：一页只显示一组设置，别把六七块叠成一条长滚动 */
   const [section, setSection] = useState<WecomSection>("answer");
   /** 右栏看的对象：某台机器人（主从）还是通道汇总（全部机器人） */
@@ -460,6 +466,34 @@ export default function WecomSettingsCard() {
     if (catalog) return;
     if (engine === "dsh" && dshReady) void loadModels(false, "channel");
   }, [engine, dshReady, catalog, loadModels]);
+
+  // 同步开关的状态存在 DSH 配置里（不是本应用设置）：进页面读一次，读不到只让开关不可点。
+  useEffect(() => {
+    if (engine !== "dsh") return;
+    let alive = true;
+    void fetchWecomWorkspaceSyncStatus()
+      .then((next) => {
+        if (alive) setWorkspaceSync(next);
+      })
+      .catch(() => {
+        // 读不到状态不影响本页其它配置。
+      });
+    return () => {
+      alive = false;
+    };
+  }, [engine]);
+
+  const toggleWorkspaceSync = async (enabled: boolean) => {
+    setWorkspaceSyncBusy(true);
+    setMsg("");
+    try {
+      setWorkspaceSync(await setWecomWorkspaceSyncEnabled(enabled));
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setWorkspaceSyncBusy(false);
+    }
+  };
 
   const resyncProfile = async () => {
     setBusy(true);
@@ -1314,6 +1348,40 @@ export default function WecomSettingsCard() {
                           ? t("wecom.dshModelsEmpty")
                           : t("wecom.dshModelsHint", { count: modelCount })}
                   </p>
+                }
+              />
+            ) : null}
+
+            {/* 会话实时同步：DSH 的工作区表只在宿主启动时读一次，不注入这个插件
+                就得重启 Harness 才能看到企微新建的会话。开关即注入/卸载。 */}
+            {engine === "dsh" ? (
+              <Row
+                asSwitch
+                label={t("wecom.workspaceSync")}
+                control={
+                  <label className="toggle" title={t("wecom.workspaceSyncHintShort")}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(workspaceSync?.installed)}
+                      disabled={busy || workspaceSyncBusy || workspaceSync === null}
+                      onChange={(e) => void toggleWorkspaceSync(e.target.checked)}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                }
+                hint={
+                  <>
+                    <Hint
+                      summary={t("wecom.workspaceSyncHintShort")}
+                      details={t("wecom.workspaceSyncHint")}
+                    />
+                    {workspaceSync?.installed && !workspaceSync.active ? (
+                      <p className="setting-hint">{t("wecom.workspaceSyncPending")}</p>
+                    ) : null}
+                    {workspaceSync?.detail ? (
+                      <p className="setting-hint">{workspaceSync.detail}</p>
+                    ) : null}
+                  </>
                 }
               />
             ) : null}

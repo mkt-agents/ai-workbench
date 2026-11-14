@@ -216,6 +216,7 @@
     "start": "Start",
     "stop": "Stop",
     "refresh": "Refresh",
+    "refreshed": "Interface refreshed",
     "running": "Running",
     "loadingUi": "Loading UI…",
     "loadingUiLabel": "Loading UI",

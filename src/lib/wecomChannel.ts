@@ -948,6 +948,36 @@ export async function fetchWecomSessionLog(
   return invoke<WecomSessionLogEntry[]>("wecom_session_recent", { limit });
 }
 
+/**
+ * DSH 工作区实时同步（设置页开关）。
+ *
+ * DSH 的工作区表只在宿主启动时读一次，外部写文件要重启才可见；打开这个开关会往
+ * `~/.dsh/profiles/desktop/cordis.patch.yml` 注入一个小插件，由宿主自己把新会话
+ * `attachSession` 到对应工作区，侧边栏几秒内就能看到。
+ */
+export type WecomWorkspaceSyncStatus = {
+  /** 桌面端 patch 里是否已有标记块 */
+  installed: boolean;
+  /** 宿主是否真的加载了插件（插件 apply 回执）；false 表示还在等 Harness 重启 */
+  active: boolean;
+  appliedAt?: string | null;
+  pluginPath?: string | null;
+  profilePatch?: string | null;
+  sessionsRoot?: string | null;
+  /** 不可用原因（没装桌面端 / 读写出错） */
+  detail?: string | null;
+};
+
+export async function fetchWecomWorkspaceSyncStatus(): Promise<WecomWorkspaceSyncStatus> {
+  return invoke<WecomWorkspaceSyncStatus>("wecom_dsh_workspace_sync_status");
+}
+
+export async function setWecomWorkspaceSyncEnabled(
+  enabled: boolean,
+): Promise<WecomWorkspaceSyncStatus> {
+  return invoke<WecomWorkspaceSyncStatus>("wecom_dsh_workspace_sync_set", { enabled });
+}
+
 
 export type WecomQrStart = {
   scode: string;

@@ -216,6 +216,7 @@
     "start": "启动",
     "stop": "停止",
     "refresh": "刷新",
+    "refreshed": "界面已刷新",
     "running": "运行中",
     "loadingUi": "正在加载界面…",
     "loadingUiLabel": "正在加载界面",

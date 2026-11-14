@@ -100,6 +100,7 @@ export interface Invocations {
   >;
   invokeStartDsh: (port?: number) => Promise<DshInstance>;
   invokeDshSetEmbed: (params: { url: string; x: number; y: number; width: number; height: number; visible: boolean }) => Promise<void>;
+  invokeDshEmbedReload: () => Promise<void>;
   invokeStopDsh: (port: number) => Promise<string>;
   invokeListDsh: () => Promise<DshInstance[]>;
   invokeCheckDshPort: (port: number) => Promise<boolean>;
@@ -354,6 +355,8 @@ export const invocations: Invocations = {
     tauriInvoke<DshInstance>('start_dsh', { port }),
   invokeDshSetEmbed: (params) =>
     tauriInvoke<void>('dsh_set_embed', params),
+  invokeDshEmbedReload: () =>
+    tauriInvoke<void>('dsh_embed_reload'),
   invokeStopDsh: (port: number) =>
     tauriInvoke<string>('stop_dsh', { port }),
   invokeListDsh: () =>

@@ -68,6 +68,7 @@ mod wecom_skywalking;
 mod wecom_docgen;
 mod wecom_dsh;
 mod wecom_dsh_profile;
+mod dsh_workspace_sync;
 mod wecom_log;
 mod wecom_diagnostics;
 mod wecom_progress;
@@ -782,9 +783,12 @@ pub fn run() {
             wecom_diagnostic_commands::wecom_diagnostic_export,
             wecom_channel::wecom_session_recent,
             wecom_diagnostic_commands::wecom_session_recent_page,
+            dsh_workspace_sync::wecom_dsh_workspace_sync_status,
+            dsh_workspace_sync::wecom_dsh_workspace_sync_set,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::dsh_set_embed,
+            dsh_commands::dsh_embed_reload,
             dsh_commands::stop_dsh,
             dsh_commands::list_dsh,
             dsh_commands::check_dsh_port,

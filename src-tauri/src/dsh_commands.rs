@@ -839,9 +839,25 @@ fn wait_for_index_auth(port: u16) -> IndexAuth {
 }
 
 /// DSH web-server arguments, so both launch strategies stay in sync.
-fn dsh_web_args(port: u16) -> Vec<String> {
-    vec![
-        "web".into(),
+///
+/// `--patch` is a LAUNCHER flag: it must sit before the first token the launcher
+/// does not own. `dsh web` is sugar for `dsh --profile web`, and everything after
+/// the first inner token (`--no-open`) is forwarded to the web app verbatim —
+/// that app rejects the overlay with `error: unknown option '--patch'`. So when an
+/// overlay is present, the launcher form is spelled out instead of the shorthand.
+fn dsh_web_args(port: u16, patch: Option<&Path>) -> Vec<String> {
+    let mut args = Vec::new();
+    if patch.is_some() {
+        args.push("--profile".into());
+        args.push("web".into());
+    } else {
+        args.push("web".into());
+    }
+    if let Some(patch) = patch {
+        args.push("--patch".into());
+        args.push(patch.to_string_lossy().into_owned());
+    }
+    args.extend([
         "--no-open".into(),
         "--port".into(),
         port.to_string(),
@@ -849,7 +865,8 @@ fn dsh_web_args(port: u16) -> Vec<String> {
         "127.0.0.1".into(),
         "--trusted-host".into(),
         format!("127.0.0.1:{port}"),
-    ]
+    ]);
+    args
 }
 
 /// Environment and flags shared by every launch attempt. stderr is piped (not null):
@@ -906,7 +923,10 @@ fn watch_launch_url(child: &mut std::process::Child, log: &LaunchLog) -> mpsc::R
 /// `--trusted-host` passes the Host/Origin fence; identity is the launch token
 /// printed on stdout (`dsh web: http://127.0.0.1:<port>/?token=…`).
 fn spawn_dsh_server(port: u16, path_value: &str) -> Result<SpawnedDsh, String> {
-    let args = dsh_web_args(port);
+    // 工作区实时同步：设置页开关打开时，给内嵌 Harness 也挂上同一份插件。
+    // 这一步只写应用数据目录下的覆盖层，不动用户的 ~/.dsh/profile。
+    let patch = crate::dsh_workspace_sync::embedded_patch();
+    let args = dsh_web_args(port, patch.as_deref());
     let mut previous: Option<String> = None;
 
     // Prefer the installed entry point: `node lib/bin.js` costs ~0.2s, where
@@ -1582,6 +1602,21 @@ pub async fn dsh_set_embed(
     Ok(())
 }
 
+/// Reload the embedded Harness page in place.
+///
+/// The toolbar's refresh button used to only re-probe the service, which is a no-op
+/// whenever DSH is already running — the click looked dead. Reloading the child
+/// webview gives it a visible effect and re-reads whatever panel is on screen.
+#[tauri::command]
+pub async fn dsh_embed_reload(app: tauri::AppHandle) -> Result<(), String> {
+    let webview = app
+        .get_webview(DSH_EMBED_LABEL)
+        .ok_or("Harness 页面尚未嵌入")?;
+    webview
+        .eval("window.location.reload()")
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn stop_dsh(port: u16, window: tauri::Window) -> Result<String, String> {
     tokio::task::spawn_blocking(move || stop_dsh_sync(port, window))
@@ -2070,9 +2105,10 @@ pub fn sync_model_to_dsh(
 #[cfg(test)]
 mod tests {
     use super::{
-        dsh_launch_hint, dsh_lock_record_is_stale, dsh_popup_stays_in_webview, node_range_minimum,
-        parse_dsh_web_line, parse_semver_triple,
+        dsh_launch_hint, dsh_lock_record_is_stale, dsh_popup_stays_in_webview, dsh_web_args,
+        node_range_minimum, parse_dsh_web_line, parse_semver_triple,
     };
+    use std::path::Path;
 
     #[test]
     fn launch_log_redacts_credential_but_control_url_keeps_it() {
@@ -2087,6 +2123,24 @@ mod tests {
         assert!(url.contains("fixture-secret"));
         assert!(!tail.contains("fixture-secret"));
         assert!(tail.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn patch_overlay_precedes_the_web_app_arguments() {
+        // `dsh` hands everything after the first inner token to the web app, and
+        // that app rejects `--patch`. Verified against 0.2.2-rc.3: with the overlay
+        // after `--no-open` the child died with `error: unknown option '--patch'`.
+        let args = dsh_web_args(3080, Some(Path::new("C:/tmp/embedded.patch.yml")));
+        let patch = args.iter().position(|arg| arg == "--patch").unwrap();
+        let inner = args.iter().position(|arg| arg == "--no-open").unwrap();
+        assert!(patch < inner, "{args:?}");
+        assert_eq!(args[0], "--profile");
+        assert_eq!(args[1], "web");
+
+        // Without an overlay the `web` shorthand keeps working unchanged.
+        let plain = dsh_web_args(3080, None);
+        assert_eq!(plain[0], "web");
+        assert!(!plain.iter().any(|arg| arg == "--patch"));
     }
 
     #[test]

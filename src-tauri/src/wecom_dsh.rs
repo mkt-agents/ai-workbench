@@ -34,6 +34,9 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
 /// `session/new`。DSH 每次失败的创建都会在磁盘留一个空壳会话。
 const NEW_SESSION_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
 const STDERR_TAIL_LINES: usize = 24;
+/// 企微会话在 DSH 侧的标题前缀标签。与 dsh-im 的中文通道标签逐字一致
+/// （`企业微信 · `，`·` 是 U+00B7），它按这个前缀识别通道并在侧边栏画企微图标。
+const CHANNEL_TITLE_LABEL: &str = "企业微信";
 
 /// 渠道权限档位 → DSH 沙箱 mode + 审批 policy。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -853,9 +856,12 @@ impl DshEngine {
         };
         if action == "new" {
             self.persist_sessions().await;
-            // DSH UI 的「按工作区」分组只认 workspace.json 里的 sessionIds 白名单；
-            // ACP 只传 cwd，这里补一次登记（best-effort：失败只写日志，不影响回合）。
-            let outcome = crate::dsh_workspace_registry::register_session(&workspace, &id);
+        }
+        // DSH UI 的「按工作区」分组只认 workspace.json 里的 sessionIds 白名单；
+        // ACP 只传 cwd，这里补登记。**每轮都补**：DSH 界面运行中会用内存态覆盖该
+        // 文件，命中即返回（AlreadyRegistered 不写日志，免得刷屏）。
+        let outcome = crate::dsh_workspace_registry::register_session(&workspace, &id);
+        if outcome != crate::dsh_workspace_registry::RegisterOutcome::AlreadyRegistered {
             crate::wecom_log::write(
                 "dsh-workspace",
                 &format!(
@@ -1591,15 +1597,19 @@ fn prepare_launch(tag: &str, tier: Tier, workspace: &str, docgen: Option<&(Strin
     }
     let cli = dsh_commands::dsh_cli(&path_value)?;
     let patch = write_permission_patch(tag, tier, &workspace)?;
+    // 会话标题前缀：ACP 面没有改名接口，只能由自带插件在 DSH 写完 session/title 后
+    // 再补一条同源标题，让 DSH 桌面端的 dsh-im 按「企业微信 · 」识别出企微通道并画图标。
+    // 这是纯展示增强，写不进去只降级为「没有前缀」，不能连累引擎启动。
+    if let Err(err) = install_channel_title_prefix(&patch, tag) {
+        eprintln!("[wecom-dsh] 会话标题前缀未启用：{err}");
+    }
     if let Some((doc_dir, readonly)) = docgen {
         let ready = patch.with_file_name("docgen-guard-ready.json");
         if ready.exists() { std::fs::remove_file(&ready).map_err(|e| e.to_string())?; }
         let guard = patch.with_file_name("docgen-guard.mjs");
         std::fs::write(&guard, include_str!("docgen_guard.mjs")).map_err(|e| e.to_string())?;
         let extra = docgen_patch_yaml(&guard, &workspace, doc_dir, *readonly)?;
-        use std::io::Write;
-        std::fs::OpenOptions::new().append(true).open(&patch)
-            .and_then(|mut f| f.write_all(extra.as_bytes())).map_err(|e| e.to_string())?;
+        append_patch_rows(&patch, &extra)?;
     }
 
     let mut args = cli.args;
@@ -1938,6 +1948,51 @@ fn docgen_patch_yaml(guard: &std::path::Path, workspace: &std::path::Path, doc_d
             "readyFile": guard.with_file_name("docgen-guard-ready.json").to_string_lossy()}
     }]}));
     serde_yaml::to_string(&rows).map(|s| format!("\n{}", s.trim_start_matches("---\n"))).map_err(|e| e.to_string())
+}
+
+/// 落盘插件并把 insert 行追加进覆盖层。失败由调用方降级成「没有前缀」，不阻断启动。
+fn install_channel_title_prefix(patch: &std::path::Path, tag: &str) -> Result<(), String> {
+    let plugin = patch.with_file_name(channel_title_prefix_file_name(tag));
+    std::fs::write(&plugin, include_str!("channel_title_prefix.mjs"))
+        .map_err(|e| format!("写入会话标题前缀插件失败：{e}"))?;
+    append_patch_rows(
+        patch,
+        &channel_title_prefix_patch_yaml(&plugin, CHANNEL_TITLE_LABEL)?,
+    )
+}
+
+/// 标题前缀插件文件名：`tag` 为空时按通道引擎命名。带 tag 是为了让通道引擎与
+/// docgen 引擎各自拉起 DSH 时不会同写一个文件（读到半截内容插件就加载失败）。
+fn channel_title_prefix_file_name(tag: &str) -> String {
+    if tag.is_empty() {
+        "channel-title-prefix.mjs".into()
+    } else {
+        format!("channel-title-prefix-{tag}.mjs")
+    }
+}
+
+/// 覆盖层行：把标题前缀插件 insert 进 profile 根。`name` 用绝对路径即可，
+/// DSH 的 loader 直接 import（与 docgen guard 同一条路），不需要 `file://`。
+/// 走 serde_yaml 而不是手拼字符串：Windows 反斜杠路径不会被写坏。
+fn channel_title_prefix_patch_yaml(plugin: &std::path::Path, label: &str) -> Result<String, String> {
+    let rows = vec![json!({"insert": [{
+        "id": "ai-workbench-channel-title-prefix",
+        "name": plugin.to_string_lossy(),
+        "config": { "label": label },
+    }]})];
+    serde_yaml::to_string(&rows)
+        .map(|s| format!("\n{}", s.trim_start_matches("---\n")))
+        .map_err(|e| e.to_string())
+}
+
+/// 往覆盖层尾部追加行：`--patch` 是「追加覆盖」，多次追加按文件顺序生效。
+fn append_patch_rows(patch: &std::path::Path, extra: &str) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(patch)
+        .and_then(|mut f| f.write_all(extra.as_bytes()))
+        .map_err(|e| format!("追加 DSH 覆盖层失败：{e}"))
 }
 
 /// 会话映射与权限覆盖层的落盘文件名：`tag` 为空时保持旧名字（通道引擎）。
@@ -3352,6 +3407,45 @@ mod tests {
         assert_eq!(
             rows[0].get("disabled").and_then(|v| v.as_bool()),
             Some(true)
+        );
+    }
+
+    /// 标题前缀行必须能被 YAML 解析，且 Windows 反斜杠路径原样往返。
+    #[test]
+    fn channel_title_prefix_patch_is_valid_yaml() {
+        let plugin = std::path::Path::new(r"D:\data\com.ai-workbench.app\wecom-dsh\channel-title-prefix.mjs");
+        let body = channel_title_prefix_patch_yaml(plugin, CHANNEL_TITLE_LABEL).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&body).expect("patch 应是合法 YAML");
+        let rows = parsed.as_sequence().expect("顶层是行数组");
+        assert_eq!(rows.len(), 1, "只追加一行 insert");
+        let entry = &rows[0]["insert"][0];
+        assert_eq!(entry["id"].as_str(), Some("ai-workbench-channel-title-prefix"));
+        assert_eq!(
+            entry["name"].as_str(),
+            Some(r"D:\data\com.ai-workbench.app\wecom-dsh\channel-title-prefix.mjs")
+        );
+        assert_eq!(entry["config"]["label"].as_str(), Some("企业微信"));
+    }
+
+    /// 插件本体（`include_str!` 落盘的那份）必须导出 DSH 认得的三件套，
+    /// 且前缀标签与 dsh-im 的中文标签逐字一致（含 U+00B7 两侧半角空格）。
+    #[test]
+    fn channel_title_prefix_plugin_exports_expected_shape() {
+        let source = include_str!("channel_title_prefix.mjs");
+        assert!(source.contains("export const name = 'ai-workbench-channel-title-prefix'"));
+        assert!(source.contains("export const inject = ['sessions']"));
+        assert!(source.contains("export function apply(ctx, config)"));
+        assert!(source.contains("const DEFAULT_LABEL = '企业微信'"));
+        assert!(source.contains("`${label} · `"), "前缀格式必须是「标签 + 空格 + U+00B7 + 空格」");
+    }
+
+    /// 文件名带 tag：通道引擎与 docgen 引擎各起一个 DSH 进程时不能写同一个插件文件。
+    #[test]
+    fn channel_title_prefix_file_name_keeps_tag() {
+        assert_eq!(channel_title_prefix_file_name(""), "channel-title-prefix.mjs");
+        assert_eq!(
+            channel_title_prefix_file_name("docgen-42"),
+            "channel-title-prefix-docgen-42.mjs"
         );
     }
 

@@ -264,6 +264,85 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 - **收尾**：`session/prompt` 的 `stopReason` 映射成一句提示（截断 / 工具步数上限 /
   拒绝 / 取消）；DSH 回合看门狗 **1800 秒（30 分钟）**，超时先 `session/cancel` 再收尾（日志采集与补查合计另限 120 秒累计采集耗时）。
 
+## 会话标题前缀与企微图标（2026-11-14）
+
+**目标**：企微 BOT 在 DSH 里创建的会话，在 DSH 桌面端侧边栏显示成「企微图标 + 干净标题」。
+
+- **谁画图标**：DSH 桌面端装的 `@xmanrui/dsh-im` 只按标题前缀认通道
+  （`src/channels/shared/session-channel-labels.mjs` 的 `企业微信 · ` / `WeCom · `），
+  命中后把前缀文字隐去、行首画 16×16 SVG 图标。宿主这边只要把标题写成
+  `企业微信 · <原标题>`，图标就自动出现，不需要改 dsh-im。
+- **为什么只能改标题**：ACP 面只有 initialize / session.new|list|resume|close /
+  setConfigOption / prompt / cancel，**没有 rename 或 set_title**；ACP 的
+  `createUserMessage` 写死 `source: { kind: 'user' }`（不带 `rpcId`），dsh-im 自己那套
+  `wecom-<uuid>` 判定对 ACP 会话永不命中。
+- **怎么改**：`prepare_launch` 每次启动把 `channel_title_prefix.mjs`（`include_str!`）
+  落到 `wecom-dsh/channel-title-prefix[-{tag}].mjs`，再用 `--patch` 追加一行
+  `insert: [{ id: ai-workbench-channel-title-prefix, name: <绝对路径>, config: { label: 企业微信 } }]`
+  （与 docgen guard 同一条加载路径）。插件监听 `session/event` / `session/created`，
+  在 DSH 自己写完 `session/title` 之后**微任务里**追加一条同 source、同 `messageSeqs`、
+  只换文本的 `session/title`——标题投影是 last-wins 折叠。不用 `sessionTitle.rename()`：
+  它写 `source:{kind:'user'}`，会把标题钉死、让 DSH 不再按后续用户消息更新标题。
+- **幂等与安全**：已带 `企业微信 · ` 直接跳过；只接受 DSH 写出的合法标题数据
+  （`user` 源要求 `messageSeqs` 为空，`fallback`/`provider` 源要求非空且 provider 名非空）。
+  `session/event` 里同步 append 会被 DSH 判 reentrant 拒绝，所以一律走
+  `Promise.resolve()` 微任务。插件 `apply` 全程兜底：加载失败只降级为「没有前缀」，
+  绝不能让 ACP 引擎起不来（那等于整个机器人掉线）。
+- **生效范围**：只影响企微通道（当前唯一走 DSH 引擎的 IM 通道），微信通道不涉及。
+  插件写的是 ACP 进程自己持有的会话日志，DSH 桌面端下次读取会话即可看到前缀。
+  老会话已有标题、不会重发标题事件，**下一轮生成/刷新标题时补上前缀**。
+- **降级**：DSH 侧没装 dsh-im 时只体现为纯文本前缀；插件被 DSH 拒绝加载时日志里有
+  `[ai-workbench] 会话标题前缀未生效：…`，会话与回复完全不受影响。
+- **回滚**：删掉覆盖层里那条 `insert` 行（或删插件文件）即恢复原状，无历史数据迁移。
+
+## 会话为什么「重启才看得见」与工作区实时同步（2026-11-14）
+
+**现象**：企微里已经正常回话、会话日志也落盘并带了 `企业微信 · ` 前缀，但 DSH 侧边栏
+对应工作区下一片空白；重启 Harness 之后才出现。
+
+**根因（DSH 0.2.x 的架构，不是本应用的 bug）**：
+
+- `dsh-workspace` 在宿主启动时 `[Service.init]` → `rebuildEntities()` 把
+  `~/.dsh/storages/workspace.json` 整份读进内存，之后所有 RPC 只读内存；存储层没有
+  文件监听，宿主下次保存还会用内存态**覆盖**外部写入（实盘见过：19:16 我们写进去的
+  条目 19:19 被宿主抹掉）。
+- 会话归属还要过 `candidateMatches(id, path)`，它查的是宿主启动时扫盘建的
+  `sessionPaths` 索引；ACP 进程（`dsh --profile acp`）新建的会话不在索引里，所以即使
+  id 正确也会被 `sessionIds` 的 getter 过滤掉。
+- 重启后能看到，是因为宿主 init 会按会话 header 的 `cwd` 重建归属。
+
+**两条修法**：
+
+1. **登记 id 形态按磁盘实存判定**（`dsh_workspace_registry::resolve_session_id`）：
+   ACP `session/new` 返回裸 UUID、磁盘目录名也是裸 UUID；DSH 自建的会话（dsh-im）才是
+   `session-<uuid>`。旧实现盲目补前缀，写进去的 `session-<uuid>` 对不上任何会话，还会在
+   宿主剪枝时被删掉。现在先探 `~/.dsh/sessions/--<encoded cwd>--/<id>` 是否存在，命中哪个
+   用哪个；同一工作区里历史遗留的错误前缀条目会**就地替换**。登记也从「仅新建时一次」
+   改成**每轮对话幂等补登记**（`AlreadyRegistered` 不写日志），被宿主覆盖后下一轮自动补回。
+2. **宿主插件把新会话挂回工作区**（`dsh_workspace_sync.mjs` + `dsh_workspace_sync.rs`）：
+   设置 → IM机器人 → 企业微信 → 「会话实时同步」开关。打开后把插件写到
+   `%APPDATA%\com.ai-workbench.app\dsh-workspace-sync\workspace-sync.mjs`，再往
+   `~/.dsh/profiles/desktop/cordis.patch.yml` 追加一段**带标记**的 `insert` 行
+   （`# >>> ai-workbench workspace-sync >>>` … `# <<< … <<<`）。
+   **实测（DSH 0.2.2）：`patchReload: live` 不会装入新增的插件条目**，宿主只在启动时
+   读 profile，所以第一次开启后要重启一次 Harness；之后插件常驻，新会话由插件自己
+   `fs.watch` 实时挂载，不再需要重启。插件 apply 时会写
+   `dsh-workspace-sync/applied.json` 回执，设置页据此显示「等待重启」。实盘端到端验证：
+   宿主先起、再用 ACP 新建会话，9 秒内该会话已出现在对应工作区清单里。
+   - 插件 `inject: ['workspaceRegistry']`，`fs.watch(~/.dsh/sessions)` + 800ms 防抖，
+     另有 30s 兜底扫描；只对「未归组且未归档」的会话调宿主自己的
+     `Workspace.attachSession(id)`——它会校验 cwd、写进 `sessionIds`、刷新内存快照，
+     侧边栏随即通过 `workspace.follow` 流更新，**不需要重启**。
+   - 失败退避：cwd 不属于任何工作区的会话 60s 内不再重试；插件 `apply` 全程兜底，
+     加载失败只降级为「不同步」，不影响 Harness 启动。
+   - 关闭开关：按标记整块删除，patch 恢复原样；首次修改前自动备份
+     `cordis.patch.yml.ai-workbench.bak`。插件文件留在应用数据目录（几 KB，便于再次开启）。
+   - ai-workbench 自己启动的内嵌 Harness（`dsh web`）在开关打开时也会追加
+     `--patch %APPDATA%\com.ai-workbench.app\dsh-workspace-sync\embedded.patch.yml`，
+     不写用户 profile。
+- 未安装 DSH 桌面端 profile 时开关保持关闭并给出提示；插件只做「挂工作区」，不删会话、
+  不归档、不改标题。
+
 ## 会话隔离、共享任务与并发（2026-10-29）
 
 本节会话与准入已接入两档引擎。Rust全量回归805通过、0失败、14忽略；最终企微定向回归246通过、0失败、2忽略，前端及开发程序构建通过。真实企微多人联调另计，既有测试数字不自动证明实际32个模型任务的吞吐能力。
