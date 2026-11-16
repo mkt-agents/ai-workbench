@@ -3261,6 +3261,8 @@ async fn dsh_turn_inner(
 
     // 审批请求代表需要超出当前沙箱；无人值守任务不自动升级权限。
     let mut acc = String::new();
+    // 最近一次工具标题：DSH 的权限请求不带 title，拒绝文案用它兜底。
+    let mut last_tool = String::new();
     // 整轮共享一个期限（不是每个事件各刷一次），和天玑档的收流语义对齐。
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -3305,6 +3307,7 @@ async fn dsh_turn_inner(
                             .filter(|s| !s.is_empty())
                         {
                             crate::wecom_log::write("docgen", &format!("dsh 工具：{title}"));
+                            last_tool = title.to_string();
                         }
                     }
                     _ => {}
@@ -3314,7 +3317,10 @@ async fn dsh_turn_inner(
                 let (_, reject) = crate::wecom_dsh::permission_options(&params);
                 turn.answer_permission(rpc_id, reject.as_deref());
                 turn.cancel();
-                return Err(format!("文档任务拒绝权限升级：{}", crate::wecom_dsh::permission_summary(&params)));
+                return Err(format!(
+                    "文档任务拒绝权限升级：{}",
+                    crate::wecom_dsh::permission_summary(&params, &last_tool)
+                ));
             }
             Some(crate::wecom_dsh::DshEvent::Done(Err(e))) => {
                 return Err(crate::wecom_dsh::friendly_turn_error(&e));

@@ -1444,18 +1444,27 @@ impl Orchestrator {
                 }
                 Some(DshEvent::Permission { rpc_id, params }) => {
                     open_approvals.push(rpc_id);
-                    let summary = permission_summary(&params);
+                    // dsh 的权限请求只带 toolCallId，摘要靠最近一次工具标题兜底。
+                    let summary = permission_summary(&params, &last_activity);
                     let (allow_option, reject_option) = permission_options(&params);
                     let (code, reply) =
                         register_dsh_approval(app, summary.clone(), preflight_request).await;
                     let tip = format!(
-                        "🔐 DeepSeek Harness 需要你确认：{summary}\n回复「{code} 1」同意；回复「{code} 2」拒绝（5 分钟内有效）。",
+                        "🔐 {summary}\n回复「{code} 1」同意；回复「{code} 2」拒绝（5 分钟内有效）。",
                         summary = summary,
                         code = code
                     );
                     // 审批提示单独发一条**已结束**的消息：正文流还在跑，而平台对未结束的
                     // 流式更新不一定立刻显示；这条必须让用户看见，否则只能干等 5 分钟超时。
-                    crate::wecom_log::write("perm", &format!("msgid={} {summary}", msg.msgid));
+                    let call_id = params
+                        .get("toolCall")
+                        .and_then(|t| t.get("toolCallId"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-");
+                    crate::wecom_log::write(
+                        "perm",
+                        &format!("msgid={} call={call_id} {summary}", msg.msgid),
+                    );
                     let _ = self
                         .sock
                         .send_raw(wecom_proto::respond_stream(
@@ -1708,6 +1717,8 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
             approvals: Vec::new(),
         };
         let mut text = String::new();
+        // 最近一次工具标题：DSH 的权限请求不带 title，用它兜底审批摘要。
+        let mut last_tool = String::new();
         let mut tick = tokio::time::interval(Duration::from_millis(100));
 
         let result = loop {
@@ -1742,7 +1753,7 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
                     }
                 }
                 Some(DshEvent::Permission { rpc_id, params }) => {
-                    let summary = permission_summary(&params);
+                    let summary = permission_summary(&params, &last_tool);
                     let (allow, reject) = permission_options(&params);
                     let (code, reply) = register_dsh_approval(app, summary.clone(), request).await;
                     cleanup.approvals.push((code.clone(), rpc_id));
@@ -1770,6 +1781,13 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
                     phase.event();
                     if update["sessionUpdate"] == "tool_call" {
                         phase.tool();
+                        if let Some(title) = update["title"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            last_tool = title.to_string();
+                        }
                     }
                 }
                 Some(DshEvent::Done(Ok(result))) => {

@@ -480,10 +480,11 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 `reject-once`）。编排层把它登记成 4 位审批码，在对话里发一条提示：
 
 ```
-🔐 DeepSeek Harness 需要你确认：<工具摘要>
+🔐 <工具摘要>
 回复「AB12 1」同意；回复「AB12 2」拒绝（5 分钟内有效）。
 ```
 
+- 摘要来源：dsh 的 ACP 请求只带 `toolCallId`、不填 title，所以标题缺失时用**本轮最近一次工具标题**兜底，写成 `最近一步「<标题>」需要授权`；再没有才写「一个操作需要授权（DSH 未说明具体动作）」。提示行只有 🔐 和摘要，不再带「DeepSeek Harness 需要你确认」前缀。通道日志的 `perm` 行带 `call=<toolCallId>`，可与 DSH 会话里的工具调用对照。
 - 用户回复「码 1 / 码 2」→ 立刻回执 ACP（`selected: allow-once` / `selected: reject-once`），
   不需要切桌面。
 - **没有「3 本轮同类都允许」**：ACP 只有一次性授权；回 3 会得到一句说明。

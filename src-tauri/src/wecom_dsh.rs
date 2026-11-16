@@ -1520,15 +1520,39 @@ pub fn permission_options(params: &Value) -> (Option<String>, Option<String>) {
     (allow, reject)
 }
 
-/// 审批提示里的一句话摘要：dsh 只发 toolCallId，有 title 就用 title。
-pub fn permission_summary(params: &Value) -> String {
-    params
+/// 审批提示里的一句话摘要：dsh 的 ACP 请求只带 `toolCallId`、不带 title，
+/// 所以标题缺失时回落到调用方给的「最近一步」，两者都没有才给中性描述。
+///
+/// 返回值只有动作描述：提示行是 `🔐 <摘要>`，不加引擎名，也不加
+/// 「需要你确认」这类前缀。
+pub fn permission_summary(params: &Value, recent: &str) -> String {
+    if let Some(title) = params
         .get("toolCall")
         .and_then(|t| t.get("title"))
         .and_then(|v| v.as_str())
-        .map(|s| s.trim().to_string())
+        .map(one_line)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "DeepSeek Harness 需要你确认一个操作".to_string())
+    {
+        return title;
+    }
+    let recent = one_line(recent);
+    if !recent.is_empty() && recent != "正在思考" {
+        return format!("最近一步「{}」需要授权", truncate_chars(&recent, 60));
+    }
+    "一个操作需要授权（DSH 未说明具体动作）".to_string()
+}
+
+/// 折叠空白：审批提示是单条聊天消息，摘要里的换行会打断提示结构。
+fn one_line(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max).collect();
+    format!("{head}…")
 }
 
 /// 把企微下载到的字节内联成一个 ACP image content block（`{type,mimeType,data}`）。
@@ -3263,9 +3287,20 @@ mod tests {
     }
 
     #[test]
-    fn permission_summary_falls_back_when_title_missing() {
-        let params = json!({ "toolCall": { "toolCallId": "c1" } });
-        assert!(permission_summary(&params).contains("DeepSeek Harness"));
+    fn permission_summary_uses_title_then_recent_then_neutral() {
+        let titled = json!({ "toolCall": { "toolCallId": "c1", "title": "  编辑文件\nsrc/main.rs  " } });
+        assert_eq!(permission_summary(&titled, ""), "编辑文件 src/main.rs");
+
+        // title 缺失：用最近一步兜底，且不重复提示前缀
+        let bare = json!({ "toolCall": { "toolCallId": "c2" } });
+        let with_recent = permission_summary(&bare, "读取文件 attach-8.jpg");
+        assert_eq!(with_recent, "最近一步「读取文件 attach-8.jpg」需要授权");
+        assert!(!with_recent.contains("DeepSeek Harness"));
+
+        // 正在思考不是动作，回落中性描述
+        let thinking = permission_summary(&bare, "正在思考");
+        assert!(thinking.contains("未说明具体动作"));
+        assert!(!thinking.contains("DeepSeek Harness"));
     }
 
     #[test]
