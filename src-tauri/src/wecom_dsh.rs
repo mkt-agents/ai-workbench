@@ -1531,6 +1531,7 @@ pub fn permission_summary(params: &Value, recent: &str) -> String {
         .and_then(|t| t.get("title"))
         .and_then(|v| v.as_str())
         .map(one_line)
+        .map(|t| strip_engine_prefix(&t))
         .filter(|s| !s.is_empty())
     {
         return title;
@@ -1540,6 +1541,22 @@ pub fn permission_summary(params: &Value, recent: &str) -> String {
         return format!("最近一步「{}」需要授权", truncate_chars(&recent, 60));
     }
     "一个操作需要授权（DSH 未说明具体动作）".to_string()
+}
+
+/// dsh 自带的权限请求标题有时是「DeepSeek Harness 需要你确认：…」这种整句
+/// （前缀还可能重复出现）。企微提示行已经有 🔐 和「回复 N 同意/拒绝」的操作
+/// 说明，这里把引擎名与前缀剥掉，只留动作本身；剥完为空则交给调用方兜底。
+fn strip_engine_prefix(title: &str) -> String {
+    let mut out = title.to_string();
+    for pat in [
+        "DeepSeek Harness 需要你确认：",
+        "DeepSeek Harness 需要你确认:",
+        "DeepSeek Harness 需要你确认",
+        "DeepSeek Harness",
+    ] {
+        out = out.replace(pat, "");
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// 折叠空白：审批提示是单条聊天消息，摘要里的换行会打断提示结构。
@@ -3301,6 +3318,17 @@ mod tests {
         let thinking = permission_summary(&bare, "正在思考");
         assert!(thinking.contains("未说明具体动作"));
         assert!(!thinking.contains("DeepSeek Harness"));
+
+        // dsh 自带的「DeepSeek Harness 需要你确认」前缀（含重复）要剥掉，只留动作
+        let engine_title = json!({
+            "toolCall": {
+                "toolCallId": "c3",
+                "title": "DeepSeek Harness 需要你确认：\nDeepSeek Harness 需要你确认一个操作",
+            }
+        });
+        let cleaned = permission_summary(&engine_title, "");
+        assert_eq!(cleaned, "一个操作");
+        assert!(!cleaned.contains("DeepSeek Harness"));
     }
 
     #[test]
