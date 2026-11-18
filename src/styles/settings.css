@@ -3320,9 +3320,13 @@
 .settings-page .wecom-log-tab:hover {
   color: var(--text-1);
 }
+/* 激活态要一眼可辨：底座只有 5% 白，激活块至少压到 12% 白 + 主色文字，
+   再描一圈细分隔线，不然切 tab 看不出谁被选中 */
 .settings-page .wecom-log-tab.is-active {
-  background: var(--overlay-1);
-  color: var(--text-1);
+  background: var(--overlay-4);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-0);
+  font-weight: 600;
 }
 .settings-page .wecom-diag-logs .setting-hint {
   font-size: 11px;
@@ -3589,10 +3593,10 @@
 }
 /* 当前生效的那一档实心一点：查询结果对应的区间一眼可辨 */
 .settings-page .wecom-diag-quick-chip.is-active {
-  border-color: var(--accent-border);
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent-strong);
+  background: var(--accent);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--on-accent);
 }
 .settings-page .wecom-diag-quick-chip:disabled {
   border-color: var(--border-subtle);

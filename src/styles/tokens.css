@@ -265,9 +265,9 @@
 
   /* 文字 */
   --text-0: #f3f4f6;
-  --text-1: #c8ccd2;
-  --text-2: #8b929c;
-  --text-3: #5c636e;
+  --text-1: #d4d8de;
+  --text-2: #a7aeb9;
+  --text-3: #8b92a0;
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.28);
@@ -382,9 +382,9 @@
   --border-subtle: rgba(255, 255, 255, 0.07);
 
   --text-0: #eef4f8;
-  --text-1: rgba(238, 244, 248, 0.88);
-  --text-2: rgba(238, 244, 248, 0.64);
-  --text-3: rgba(238, 244, 248, 0.4);
+  --text-1: rgba(238, 244, 248, 0.92);
+  --text-2: rgba(238, 244, 248, 0.75);
+  --text-3: rgba(238, 244, 248, 0.58);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
@@ -457,9 +457,9 @@
   --border-subtle: rgba(255, 255, 255, 0.07);
 
   --text-0: #f2f4f7;
-  --text-1: rgba(242, 244, 247, 0.88);
-  --text-2: rgba(242, 244, 247, 0.64);
-  --text-3: rgba(242, 244, 247, 0.4);
+  --text-1: rgba(242, 244, 247, 0.92);
+  --text-2: rgba(242, 244, 247, 0.75);
+  --text-3: rgba(242, 244, 247, 0.58);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
@@ -535,9 +535,9 @@
   --border-subtle: rgba(255, 255, 255, 0.065);
 
   --text-0: #f6f4f1;
-  --text-1: rgba(246, 244, 241, 0.88);
-  --text-2: rgba(246, 244, 241, 0.64);
-  --text-3: rgba(246, 244, 241, 0.4);
+  --text-1: rgba(246, 244, 241, 0.92);
+  --text-2: rgba(246, 244, 241, 0.75);
+  --text-3: rgba(246, 244, 241, 0.58);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.18);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
