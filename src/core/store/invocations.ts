@@ -6,6 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
+import type { AiHubSession, AiHubTranscriptPage, AiHubTurn, ModelBudget } from '../types';
 import type { AIModelConfig, AgentUndoFile, DshInstance, DshMirrorReport, DshModelCatalog, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult, DesktopRunningApp } from '../types';
 import type {
   AiResult,
@@ -92,7 +93,8 @@ export type WecomChannelStatus = {
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
   invokeGenerateText: (params: { config: AIModelConfig; system: string; user: string }) => Promise<string>;
-  invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) => Promise<{ success: boolean; models: { id: string; label?: string; modality: string; maxOutputTokens?: number }[]; message?: string }>;
+  invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) => Promise<{ success: boolean; models: { id: string; label?: string; modality: string; maxOutputTokens?: number; contextWindowTokens?: number }[]; message?: string }>;
+  invokeResolveModelBudget: (params: { config: AIModelConfig; contextTokens?: number; thinking?: string }) => Promise<ModelBudget>;
   invokeInferModelModality: (params: { provider: string; model: string }) => Promise<string>;
   invokeInferModelMaxOutput: (params: { provider: string; model: string }) => Promise<number | null>;
   invokeDetectLocalAiEndpoints: () => Promise<
@@ -338,9 +340,10 @@ export const invocations: Invocations = {
   invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) =>
     tauriInvoke<{
       success: boolean;
-      models: { id: string; label?: string; modality: string; maxOutputTokens?: number }[];
+      models: { id: string; label?: string; modality: string; maxOutputTokens?: number; contextWindowTokens?: number }[];
       message?: string;
     }>('list_provider_models', { config: params }),
+  invokeResolveModelBudget: (params) => tauriInvoke<ModelBudget>('resolve_model_budget', params),
   invokeInferModelModality: (params: { provider: string; model: string }) =>
     tauriInvoke<string>('infer_model_modality', params),
   invokeInferModelMaxOutput: (params: { provider: string; model: string }) =>
@@ -767,3 +770,14 @@ export const invocations: Invocations = {
 
 
 export default invocations;
+
+export const listAiHubSessions = () => tauriInvoke<AiHubSession[]>("agent_session_list");
+export const searchAiHubSessions = (query: string) =>
+  tauriInvoke<string[]>("agent_session_search", { query });
+export const pageAiHubSession = (id: string, before?: number) =>
+  tauriInvoke<AiHubTranscriptPage>("agent_session_page", { id, before });
+export const editAiHubSession = (id: string, revision: number, from: number, turns: AiHubTurn[]) =>
+  tauriInvoke<number>("agent_session_edit", { input: { id, revision, from, turns, updatedAt: new Date().toISOString() } });
+export const saveAiHubSession = (id: string, title: string, create: boolean) =>
+  tauriInvoke<string[]>("agent_session_save", { id, title, create, updatedAt: new Date().toISOString() });
+export const removeAiHubSessions = (ids: string[]) => tauriInvoke<void>("agent_session_delete", { ids });

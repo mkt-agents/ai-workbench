@@ -4045,6 +4045,37 @@
   font-size: 11.5px;
   color: var(--text-2);
 }
+/* 会话正文的复制按钮：正文上方一行、靠右的小描边按钮，不压在文字上 */
+.settings-page .wecom-session-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin: 2px 0 0;
+}
+.settings-page .wecom-session-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.settings-page .wecom-session-copy:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+}
+.settings-page .wecom-session-copy.is-copied {
+  color: var(--green);
+  border-color: var(--green-border);
+}
+.settings-page .wecom-session-copy.is-failed {
+  color: var(--red);
+  border-color: var(--red-border);
+}
 .settings-page .wecom-session-full {
   margin: 2px 0 6px;
   padding: 8px 10px;

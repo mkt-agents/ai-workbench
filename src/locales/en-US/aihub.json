@@ -109,6 +109,7 @@
   "restartFromShort": "Restart from here",
   "threadMeta": "Round {{n}} · last {{max}} rounds sent",
   "threadMetaCompressed": "Round {{n}} · earlier turns compressed; summary plus the last {{max}} rounds are sent",
+  "threadRound": "Round {{n}}",
   "digestLabel": "Earlier turns compressed",
   "phase": {
     "context": "Reading changes in {{repo}}…",
@@ -144,6 +145,52 @@
     "tool": "Toolbox",
     "app": "Quick apps",
     "installed": "Installed apps"
+  },
+  "task": {
+    "title": "Task checkpoint",
+    "resume": "Resume task",
+    "resumeMessage": "Resume task",
+    "details": "Task details",
+    "goal": "Goal",
+    "workspace": "Workspace",
+    "branch": "Branch",
+    "verificationLabel": "Verification",
+    "noVerificationCommand": "No verification command run",
+    "reviewBadge": "Review needed",
+    "checkCommand": "Verification command",
+    "exitCode": "exit code {{code}}",
+    "needsReview": "Resuming starts with a read-only review of the workspace and unconfirmed actions. Approve the new plan to proceed.",
+    "state": {
+      "running": "Running",
+      "waiting_approval": "Waiting for approval",
+      "ended": "Ended",
+      "interrupted": "Interrupted"
+    },
+    "verification": {
+      "unverified": "Not verified",
+      "passed": "Checks passed",
+      "failed": "Checks failed",
+      "stale": "Checks out of date"
+    },
+    "reason": {
+      "app_interrupted": "App exited before the task ended",
+      "review_required": "Workspace or action results need review",
+      "cancelled": "Cancelled",
+      "failed": "Run failed",
+      "storage_error": "Checkpoint could not be saved",
+      "model_error": "Model turn failed",
+      "tools_unavailable": "Model tool calls were disabled",
+      "action_limit": "Action round limit reached",
+      "round_limit": "Model round limit reached",
+      "emergency_stop": "Emergency stop"
+    },
+    "action": {
+      "pending": "Running",
+      "done": "Executed",
+      "failed": "Failed",
+      "uncertain": "Needs review",
+      "reviewed": "Reviewed"
+    }
   },
   "agent": {
     "steps": "{{n}} actions",
@@ -700,5 +747,48 @@
   "petWecomErrMid1": "WeCom crashed — check AI Hub.",
   "petWecomErrMid2": "WeCom round failed.",
   "petWecomErrHi1": "WeCom error… oops.",
-  "petWecomErrHi2": "Couldn't finish the WeCom reply."
+  "petWecomErrHi2": "Couldn't finish the WeCom reply.",
+  "context": {
+    "command": "/compact",
+    "commandHint": "Compact earlier context, optionally with a focus",
+    "compacted": "Earlier context compacted",
+    "nothing": "No earlier exchanges to compact yet",
+    "compressed": "Compacted",
+    "usage": "Context usage",
+    "windowPercent": "All input as a share of the effective window; color indicates compaction pressure",
+    "historical": "Historical budget data · window usage will update on the next request",
+    "recalculate": "Compaction complete · usage will be recalculated on the next request",
+    "tokenCount": "{{n}} tokens",
+    "estimate": "About {{n}} tokens",
+    "model": "Current model",
+    "modelWindow": "Model window",
+    "effectiveWindow": "Effective window",
+    "userCap": "Settings cap {{n}}",
+    "currentInput": "Current input (including tools)",
+    "toolDefinitions": "Of which tool definitions",
+    "outputReserve": "Reserved output",
+    "modelOutput": "Model output limit",
+    "contentBudget": "Available content budget",
+    "compactTrigger": "Auto-compaction point (total input)",
+    "budgetExplanation": "Content covers system instructions, messages, and attachments. Tool definitions and reserved output also occupy the window. Compaction starts at 80% of the content budget and targets about 65%.",
+    "unknown": "Unknown",
+    "adjusted": "The request budget was adjusted",
+    "sources": { "manual": "Manual", "provider": "Provider metadata", "catalog": "Built-in model data", "fallback": "Unknown · 48k fallback", "unknown": "Unknown capability" },
+    "outputModes": { "auto": "Automatic", "manual": "Manual" },
+    "limits": {
+      "model_output_limit": "Reserved output was adjusted to the model's declared output limit.",
+      "small_window": "Automatic output was reduced to fit the smaller window.",
+      "thinking_adjusted": "Reserved output includes the current thinking budget.",
+      "thinking_disabled": "Optional thinking was disabled because it cannot fit the available capacity.",
+      "overflow_retry": "The provider reported overflow; this retry uses a temporarily smaller input budget."
+    },
+    "tokens": "Estimated input: {{used}} / {{budget}} tokens",
+    "covered": "Summary covers the first {{n}} exchanges",
+    "legacy": "Legacy summary · earlier messages are unavailable",
+    "loadingOlder": "Loading earlier messages…",
+    "loadOlder": "Load earlier messages",
+    "historyChanged": "The transcript changed. Reopen the conversation and try again.",
+    "failed": "This request used local trimming. The original transcript is still available.",
+    "tooLarge": "This question, its attachments, or required context exceeds the model window. Reduce the input and try again."
+  }
 }

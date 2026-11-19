@@ -469,9 +469,10 @@ export default function TianjiAssistantPage() {
                 <select
                   className="input-field"
                   style={{ width: 120 }}
-                  value={String(settings.agentContextTokens ?? 48000)}
+                  value={String(settings.agentContextTokens ?? 0)}
                   onChange={(e) => setSettings({ agentContextTokens: Number(e.target.value) })}
                 >
+                  <option value="0">{t("aiHub.contextTokensAuto")}</option>
                   <option value="24000">24k</option>
                   <option value="48000">48k</option>
                   <option value="96000">96k</option>

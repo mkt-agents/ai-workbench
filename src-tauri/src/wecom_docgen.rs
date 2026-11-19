@@ -3067,6 +3067,8 @@ async fn update_docs_with_agent(
             permission: "workspace".into(),
             tools: true,
             vision: false,
+            thinking: (!agent_cfg.thinking.trim().is_empty())
+                .then(|| agent_cfg.thinking.trim().to_string()),
             diff_confirm: false,
             always_allow: Vec::new(),
             web_allow: agent_cfg.web_allow.clone(),
@@ -3157,6 +3159,8 @@ async fn quality_check_with_agent(
         permission: "read".into(),
         tools: true,
         vision: false,
+        thinking: (!agent_cfg.thinking.trim().is_empty())
+            .then(|| agent_cfg.thinking.trim().to_string()),
         diff_confirm: false,
         always_allow: Vec::new(),
         web_allow: agent_cfg.web_allow.clone(),

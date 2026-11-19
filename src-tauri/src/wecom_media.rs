@@ -27,6 +27,28 @@ const QYAPI: &str = "https://qyapi.weixin.qq.com/cgi-bin";
 const MEDIA_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const MAX_INBOUND_BYTES: usize = 12 * 1024 * 1024;
 
+/// 单张图片内联进模型消息的上限：Anthropic 单图 5MB 上限留余量。
+/// 超过就退回文本提示，避免 base64 膨胀后被服务端 413/400。
+pub(crate) const MAX_INLINE_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 把 media_type 归一到模型 API 认的四种图片格式，其余回退 jpeg。
+/// dsh-acp 与 Anthropic / OpenAI 的 image block 都只认 png/jpeg/webp/gif；
+/// 企微回调里的类型可能带 `; charset=binary` 或写成 application/octet-stream。
+pub(crate) fn normalize_image_media_type(raw: &str) -> &'static str {
+    let base = raw
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match base.as_str() {
+        "image/png" => "image/png",
+        "image/webp" => "image/webp",
+        "image/gif" => "image/gif",
+        _ => "image/jpeg",
+    }
+}
+
 /// 入站 COS 临时链走 rustls，避开部分 Windows Schannel 上的 SEC_E_NO_CREDENTIALS。
 fn rustls_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();

@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Download, ListChecks, Pencil, Search, Trash2, X } from "lucide-react";
+import { searchAiHubSessions } from "../../core/store/invocations";
 import type { AiHubSession } from "../../core/types";
 
 type Props = {
@@ -27,7 +28,7 @@ type Props = {
 };
 
 function turnCount(session: AiHubSession): number {
-  return Math.ceil((session.turns?.length ?? 0) / 2);
+  return Math.ceil(session.total / 2);
 }
 
 /** Persisted-session panel with inline rename + batch delete. */
@@ -43,13 +44,21 @@ export default function SessionHistory(props: Props) {
   const [selected, setSelected] = useState<string[]>([]);
 
   const q = query.trim().toLowerCase();
-  const visible = useMemo(() => {
-    if (!q) return sessions;
-    return sessions.filter((s) => {
-      if ((s.title || "").toLowerCase().includes(q)) return true;
-      return (s.turns || []).some((turn) => turn.content.toLowerCase().includes(q));
-    });
-  }, [sessions, q]);
+  const [matches, setMatches] = useState<{ query: string; ids: string[] }>();
+  useEffect(() => {
+    if (!q) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      void searchAiHubSessions(q).then(
+        (ids) => { if (active) setMatches({ query: q, ids }); },
+        () => { if (active) setMatches(undefined); },
+      );
+    }, 150);
+    return () => { active = false; clearTimeout(timer); };
+  }, [q, sessions]);
+  const visible = useMemo(() => !q ? sessions : sessions.filter((session) =>
+    session.title.toLowerCase().includes(q) || (matches?.query === q && matches.ids.includes(session.id)),
+  ), [sessions, q, matches]);
 
   // 只认当前列表里还看得见的选中项：搜索过滤掉的那些不该被顺手删掉
   const chosen = useMemo(() => visible.filter((s) => selected.includes(s.id)), [visible, selected]);

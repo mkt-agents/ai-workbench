@@ -1,6 +1,48 @@
 use serde::{Deserialize, Serialize};
 use crate::DbState;
 
+/// Idempotent migration for old databases and fresh installs alike. Keep these
+/// additive: legacy max_tokens is the manual request and must not be rewritten.
+pub(crate) fn migrate_model_budget_columns(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(ai_models)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+    for (name, definition) in [
+        ("context_window_tokens", "INTEGER"),
+        ("output_budget_mode", "TEXT DEFAULT 'manual'"),
+        ("capability_cache", "TEXT"),
+    ] {
+        if !columns.contains(name) {
+            conn.execute(&format!("ALTER TABLE ai_models ADD COLUMN {name} {definition}"), [])?;
+        }
+    }
+    Ok(())
+}
+
+fn model_capability_cache_json(obj: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    let value = obj.get("capability_cache")?;
+    let value = match value.as_str() {
+        Some(text) => serde_json::from_str(text).ok()?,
+        None => value.clone(),
+    };
+    let cache: crate::model_capability::ModelCapabilityCache = serde_json::from_value(value).ok()?;
+    let cache = cache.validated_for(
+        obj.get("provider")?.as_str()?,
+        obj.get("base_url")?.as_str()?,
+        obj.get("model")?.as_str()?,
+    )?;
+    serde_json::to_string(&cache).ok()
+}
+
+fn model_output_mode(obj: &serde_json::Map<String, serde_json::Value>) -> &'static str {
+    if obj.get("output_budget_mode").and_then(|v| v.as_str())
+        .is_some_and(|mode| mode.trim().eq_ignore_ascii_case("auto")) {
+        "auto"
+    } else {
+        "manual"
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SqlRow {
     #[serde(flatten)]
@@ -340,7 +382,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
         }
         DbTable::AiModels => {
             tx.execute(
-                "INSERT INTO ai_models (id, name, provider, api_key, auth_type, base_url, model, temperature, max_tokens, is_default, last_test_ok, last_test_at, last_test_msg, created_at, updated_at, vision, vision_mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                "INSERT INTO ai_models (id, name, provider, api_key, auth_type, base_url, model, temperature, max_tokens, is_default, last_test_ok, last_test_at, last_test_msg, created_at, updated_at, vision, vision_mode, context_window_tokens, output_budget_mode, capability_cache) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 rusqlite::params![
                     json_str(obj, "id")?,
                     json_str(obj, "name")?,
@@ -359,6 +401,9 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "updated_at")?,
                     json_opt_i64(obj, "vision").unwrap_or(0),
                     json_opt_str(obj, "vision_mode").unwrap_or_else(|| "auto".to_string()),
+                    obj.get("context_window_tokens").and_then(|v| v.as_i64()).filter(|v| (4_096..=2_000_000).contains(v)),
+                    model_output_mode(obj),
+                    model_capability_cache_json(obj),
                 ],
             ).map_err(|e| e.to_string())?;
         }
@@ -502,6 +547,10 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
 #[tauri::command]
 pub async fn db_load(state: tauri::State<'_, DbState>, table: DbTable) -> Result<Vec<SqlRow>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    load_rows(&conn, table)
+}
+
+fn load_rows(conn: &rusqlite::Connection, table: DbTable) -> Result<Vec<SqlRow>, String> {
     let sql = load_sql(table);
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let column_names: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
@@ -514,6 +563,10 @@ pub async fn db_load(state: tauri::State<'_, DbState>, table: DbTable) -> Result
     }
     if table == DbTable::AiModels {
         for row in &mut results {
+            let mode = model_output_mode(&row.columns);
+            let cache = model_capability_cache_json(&row.columns);
+            row.columns.insert("output_budget_mode".into(), mode.into());
+            row.columns.insert("capability_cache".into(), cache.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
             if let Some(serde_json::Value::String(key)) = row.columns.get_mut("api_key") {
                 match crate::secret_protect::unprotect_secret(key) {
                     Ok(plain) => *key = plain,
@@ -548,6 +601,10 @@ pub async fn db_save(
             .ok_or_else(|| "each row must be a JSON object".to_string())?
             .clone();
         insert_row(&tx, table, &obj)?;
+    }
+    if matches!(table, DbTable::AiHubSessions) {
+        crate::agent_task::prune_deleted_sessions(&tx).map_err(|e| format!("清理任务检查点失败: {e}"))?;
+        crate::agent_transcript::prune(&tx).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| format!("提交事务失败: {e}"))?;
     Ok(())
@@ -717,10 +774,11 @@ mod tests {
                 model TEXT NOT NULL, temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT 4096,
                 is_default INTEGER DEFAULT 0, last_test_ok INTEGER, last_test_at TEXT,
                 last_test_msg TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                vision INTEGER DEFAULT 0, vision_mode TEXT DEFAULT 'auto'
+                vision INTEGER DEFAULT 0, vision_mode TEXT DEFAULT 'auto', context_window_tokens INTEGER
             );"#,
         )
         .unwrap();
+        super::migrate_model_budget_columns(&conn).unwrap();
 
         let base = |id: &str| {
             let mut map = serde_json::Map::new();
@@ -784,6 +842,72 @@ mod tests {
         let never = read("t3");
         assert_eq!(never.0, None);
         assert_eq!(never.1, None);
+    }
+
+    #[test]
+    fn ai_model_budget_migration_preserves_legacy_and_roundtrips_explicit_metadata() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ai_models (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL,
+                api_key TEXT NOT NULL, auth_type TEXT DEFAULT 'api', base_url TEXT NOT NULL,
+                model TEXT NOT NULL, temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT 4096,
+                is_default INTEGER DEFAULT 0, last_test_ok INTEGER, last_test_at TEXT,
+                last_test_msg TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                vision INTEGER DEFAULT 0, vision_mode TEXT DEFAULT 'auto'
+            );
+            INSERT INTO ai_models (id,name,provider,api_key,base_url,model,max_tokens,created_at,updated_at)
+                VALUES ('old','Legacy','custom','','https://api.test/v1','old-model',65000,'2026-01-01','2026-01-01');"
+        ).unwrap();
+        super::migrate_model_budget_columns(&conn).unwrap();
+        super::migrate_model_budget_columns(&conn).unwrap();
+        let old = super::load_rows(&conn, DbTable::AiModels).unwrap().remove(0).columns;
+        assert_eq!(old["max_tokens"], 65_000);
+        assert_eq!(old["output_budget_mode"], "manual");
+        assert!(old["context_window_tokens"].is_null());
+        assert!(old["capability_cache"].is_null());
+        let mut fresh = old.clone();
+        fresh.insert("id".into(), "new".into());
+        fresh.insert("provider".into(), " OpenAI ".into());
+        fresh.insert("model".into(), " gpt-4o ".into());
+        fresh.insert("output_budget_mode".into(), "auto".into());
+        fresh.insert("context_window_tokens".into(), 70_000.into());
+        fresh.insert("capability_cache".into(), serde_json::json!({
+            "provider":"openai", "baseUrl":" https://api.test/v1/// ", "model":"gpt-4o",
+            "contextWindowTokens":90000, "maxOutputTokens":6000, "apiKey":"must-not-be-stored"
+        }).to_string().into());
+        let tx = conn.unchecked_transaction().unwrap();
+        insert_row(&tx, DbTable::AiModels, &fresh).unwrap();
+        tx.commit().unwrap();
+        let rows = super::load_rows(&conn, DbTable::AiModels).unwrap();
+        let saved = &rows.iter().find(|r| r.columns["id"] == "new").unwrap().columns;
+        assert_eq!(saved["output_budget_mode"], "auto");
+        assert_eq!(saved["context_window_tokens"], 70_000);
+        let cache: serde_json::Value = serde_json::from_str(saved["capability_cache"].as_str().unwrap()).unwrap();
+        assert_eq!(cache["provider"], "openai");
+        assert_eq!(cache["baseUrl"], "https://api.test/v1");
+        assert_eq!(cache["model"], "gpt-4o");
+        assert_eq!(cache["maxOutputTokens"], 6000);
+        assert!(cache.get("apiKey").is_none());
+        // A full-table save/reload must retain both old and new budgets.
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute("DELETE FROM ai_models", []).unwrap();
+        for row in &rows { insert_row(&tx, DbTable::AiModels, &row.columns).unwrap(); }
+        tx.commit().unwrap();
+        let rows = super::load_rows(&conn, DbTable::AiModels).unwrap();
+        assert_eq!(rows.iter().find(|r| r.columns["id"] == "old").unwrap().columns["max_tokens"], 65_000);
+        // Changing the connection invalidates the cache on load, even before a save.
+        conn.execute("UPDATE ai_models SET base_url='https://other.test/v1' WHERE id='new'", []).unwrap();
+        let rows = super::load_rows(&conn, DbTable::AiModels).unwrap();
+        assert!(rows.iter().find(|r| r.columns["id"] == "new").unwrap().columns["capability_cache"].is_null());
+        // Mismatched caches cannot be imported back onto the changed identity.
+        fresh.insert("base_url".into(), "https://other.test/v1".into());
+        fresh.insert("id".into(), "stale".into());
+        let tx = conn.unchecked_transaction().unwrap();
+        insert_row(&tx, DbTable::AiModels, &fresh).unwrap();
+        tx.commit().unwrap();
+        let raw: Option<String> = conn.query_row("SELECT capability_cache FROM ai_models WHERE id='stale'", [], |r| r.get(0)).unwrap();
+        assert!(raw.is_none());
     }
 
     #[test]

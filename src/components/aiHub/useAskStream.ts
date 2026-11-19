@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AIModelConfig, AiHubPlanStep, AiHubTurn } from "../../core/types";
+import type { AIModelConfig, AiHubContextInfo, AiHubPlanStep, AiHubTranscriptPage, AiHubTurn } from "../../core/types";
 import { recordAiUsage } from "../../lib/aiUsage";
 import {
   formatAttachmentsBlock,
@@ -10,8 +10,8 @@ import {
   type AskAttachment,
 } from "../../lib/askAttachments";
 import { buildMeta, buildSystem, stepsMutatedWorkspace } from "./config";
-import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
-import { buildUserMessage, stepsToBlocks, turnsToMessages } from "./harness";
+import { pageAiHubSession } from "../../core/store/invocations";
+import { buildUserMessage, stepsToBlocks } from "./harness";
 import { cleanDailyReport, dailyReportSystem, isDailyReport, isDailyRevision, type DailyStyle } from "./dailyReport";
 import { routeQuestion } from "./route";
 import type { AskMode, RouteOverride } from "./route";
@@ -160,7 +160,7 @@ export type AgentRunOptions = {
   mcp: { name: string; command: string; args: string }[];
 };
 
-/** Full transcript (displayed + persisted). Past the verbatim window, older rounds fold into a digest. */
+/** Build the two transcript entries for a completed exchange. */
 function appendTurn(
   prev: QaTurn[],
   question: string,
@@ -221,7 +221,7 @@ function appendTurn(
       ...(usage?.modelName ? { modelName: usage.modelName } : {}),
     },
   ];
-  return compactSession(next);
+  return next;
 }
 
 export type AskStreamOptions = {
@@ -243,7 +243,10 @@ export type AskStreamOptions = {
   /** 「以后都允许」：把这一类的 `action_kind` 写进设置，下一轮直接放行。带仓库路径好按仓记忆。 */
   onRememberKind?: (kind: string, repoPath: string) => void;
   /** Persist the completed exchange as a session (wired to useAskSessions). */
-  persistTurns: (turns: QaTurn[], firstQuestion: string) => void;
+  persistTurns: (id: string, revision: number, from: number, turns: QaTurn[]) => Promise<number>;
+  ensureSession: (firstQuestion: string) => Promise<string>;
+  onSessionCreated: (id: string) => void;
+  checkpointEnabled: boolean;
   /** Active profile: extra system role + optional temperature override. */
   profileSystemRole?: string;
   profileTemperature?: number;
@@ -263,7 +266,7 @@ export function useAskStream(opts: AskStreamOptions) {
   const { t } = useTranslation("aihub");
   const {
     selectedModel, fallbackModel, input, setInput, setSelectedText, getContext, collectDailyBrief,
-    routeOverride, onSent, onInvalidateContext, onRememberKind, persistTurns,
+    routeOverride, onSent, onInvalidateContext, onRememberKind, persistTurns, ensureSession, onSessionCreated, checkpointEnabled,
     profileSystemRole, profileTemperature, attachments = [], agent, dailyStyle = "chat",
   } = opts;
 
@@ -283,7 +286,7 @@ export function useAskStream(opts: AskStreamOptions) {
     setBusy(value);
   };
   const [error, setError] = useState<string | null>(null);
-  /** Full transcript. The last 50 rounds go verbatim; older rounds ride along as a digest. */
+  /** Mounted tail of the local transcript. Rust assembles the model context separately. */
   const [history, setHistory] = useState<QaTurn[]>([]);
   /** Question currently being answered (shown above the streaming answer). */
   const [pending, setPending] = useState<{ question: string } | null>(null);
@@ -333,6 +336,77 @@ export function useAskStream(opts: AskStreamOptions) {
   const persistRef = useRef(persistTurns);
   persistRef.current = persistTurns;
 
+  const cursor = useRef<{ id: string; revision: number; pending: Promise<void>; failed: boolean } | null>(null);
+  const startRef = useRef(0);
+  const [historyStart, setHistoryStart] = useState(0);
+  const [legacySummary, setLegacySummary] = useState("");
+  const [contextInfo, setContextInfo] = useState<AiHubContextInfo | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const pagingRef = useRef(false);
+  const pendingWrites = useRef(new Map<string, Promise<void>>());
+
+  const flushTranscript = async (id: string) => {
+    await pendingWrites.current.get(id);
+    if (cursor.current?.id === id && cursor.current.failed) throw new Error(t("context.historyChanged"));
+  };
+
+  const readySession = async (question: string) => {
+    if (!cursor.current) {
+      const id = await ensureSession(question);
+      cursor.current = { id, revision: 0, pending: Promise.resolve(), failed: false };
+      onSessionCreated(id);
+    }
+    const current = cursor.current;
+    await current.pending;
+    if (current.failed) throw new Error(t("context.historyChanged"));
+    return current;
+  };
+
+  const saveSuffix = useCallback((from: number, turns: QaTurn[]) => {
+    const current = cursor.current;
+    if (!current) return;
+    setContextInfo((previous) => previous && previous.covered > from ? null : previous);
+    current.pending = current.pending.then(async () => {
+      if (current.failed) return;
+      try {
+        current.revision = await persistRef.current(current.id, current.revision, from, turns);
+      } catch (error) {
+        current.failed = true;
+        if (cursor.current === current) setError(String(error));
+      }
+    });
+    const write = current.pending;
+    pendingWrites.current.set(current.id, write);
+    void write.then(() => {
+      if (pendingWrites.current.get(current.id) === write) pendingWrites.current.delete(current.id);
+    });
+  }, []);
+
+  const loadOlder = async () => {
+    const current = cursor.current;
+    const before = startRef.current;
+    if (!current || !before || busyRef.current || pagingRef.current) return;
+    pagingRef.current = true;
+    setLoadingOlder(true);
+    try {
+      await current.pending;
+      const page = await pageAiHubSession(current.id, before);
+      if (cursor.current !== current || busyRef.current || startRef.current !== before) return;
+      if (page.revision !== current.revision) throw new Error(t("context.historyChanged"));
+      setHistory((existing) => [...page.turns, ...existing]);
+      lastHistoryRef.current = [...page.turns, ...lastHistoryRef.current];
+      if (failedRef.current) failedRef.current.history = [...page.turns, ...failedRef.current.history];
+      startRef.current = page.start;
+      setHistoryStart(page.start);
+    } catch (error) {
+      if (cursor.current === current) setError(String(error));
+    } finally {
+      pagingRef.current = false;
+      setLoadingOlder(false);
+    }
+  };
+
+
   /** Attachments of the last dispatched round, so 重新生成 replays the same files. */
   const lastAttachmentsRef = useRef<AskAttachment[]>([]);
 
@@ -340,27 +414,27 @@ export function useAskStream(opts: AskStreamOptions) {
   const send = async (
     rawInput?: string,
     historyOverride?: QaTurn[],
-    replay?: { mode: AskMode; attachments?: AskAttachment[] },
+    replay?: { mode: AskMode; attachments?: AskAttachment[]; resume?: { taskId: string; sessionId: string } },
   ) => {
     if (busyRef.current) return;
     if (!selectedModel) {
       setError(t("noModel"));
       return;
     }
+    const resume = replay?.resume;
     const question = (rawInput ?? input).trim();
     if (!question) {
       setError(t("emptyInput"));
       return;
     }
     // 只读权限没有仓库也能问；会改东西的三档必须落在一个工作区或仓库里
-    if (agent.permission !== "read" && !agent.repoPath.trim()) {
+    if (!resume && agent.permission !== "read" && !agent.repoPath.trim()) {
       setError(t("agent.noRepo"));
       return;
     }
     // The context dump is per-request; history carries only the plain Q&A pairs.
     const baseHistory = historyOverride ?? history;
-    /** Char-budgeted transcript for this request; oldest rounds fold out first. */
-    const budget = requestHistory(baseHistory);
+    const before = startRef.current + baseHistory.length;
     /** The previous round's checklist belongs to that round, not this one. */
     rememberPlan([]);
     /** The composer clears attachments on send: this round carries its own copy, so a
@@ -390,6 +464,7 @@ export function useAskStream(opts: AskStreamOptions) {
     failedRef.current = null;
     setFailedMode(null);
     if (!rawInput) setInput("");
+
     let sentMode: AskMode = replay?.mode ?? "chat";
     let keepWhole = false;
     /** Daily report round: no tools, and the answer is cleaned before it lands. */
@@ -424,7 +499,7 @@ export function useAskStream(opts: AskStreamOptions) {
       setStopping(false);
       lastQuestionRef.current = question;
       lastHistoryRef.current = baseHistory;
-      persistRef.current(nextTurns, question);
+      saveSuffix(before, nextTurns.slice(baseHistory.length));
       // The round changed the repo, so the cached workbench context now describes
       // files as they were before the agent touched them.
       if (stepsMutatedWorkspace(agentStepsRef.current)) onInvalidateContext();
@@ -518,7 +593,11 @@ export function useAskStream(opts: AskStreamOptions) {
       let ctxTruncated = false;
       if (route.mode === "project") setPhase("context");
       const reviseDaily = isDailyRevision(question) && Boolean(lastDailyBriefRef.current);
-      if (isDailyReport(question) || reviseDaily) {
+      if (resume) {
+        system = buildSystem(selectedModel, "project", false);
+        if (profileSystemRole?.trim()) system += `\n\n[Profile] ${profileSystemRole.trim()}`;
+        user = question;
+      } else if (isDailyReport(question) || reviseDaily) {
         setPhase("context");
         const brief = isDailyReport(question)
           ? await collectDailyBrief()
@@ -561,14 +640,12 @@ export function useAskStream(opts: AskStreamOptions) {
         user += formatAttachmentsBlock(sentAttachments);
         if (stoppedEarly()) return;
       }
-      system = withSessionDigest(system, baseHistory);
       if (streamIdRef.current === myGen) setPhase("waiting");
       setSource({
         mode: sentMode,
         summary,
         modelName: selectedModel.name,
         contextTruncated: ctxTruncated || undefined,
-        droppedTurns: budget.dropped || undefined,
       });
       lastModeRef.current = sentMode;
       if (!replay) onSent();
@@ -681,6 +758,10 @@ export function useAskStream(opts: AskStreamOptions) {
         teardown();
       };
 
+      unlistenersRef.current.push(await listen<AiHubContextInfo & { id: string; degraded?: boolean }>("agent-context-state", ({ payload }) => {
+        if (payload.id !== reqId || streamIdRef.current !== myGen) return;
+        setContextInfo(payload);
+      }));
       unlistenersRef.current.push(await listen<{ id: string; text: string }>("generate-text-chunk", onChunk));
       unlistenersRef.current.push(
         await listen<{
@@ -780,22 +861,26 @@ export function useAskStream(opts: AskStreamOptions) {
         }),
       );
 
-      const maxTokens = Math.max(selectedModel.maxTokens || 0, 1536);
       const temperature =
         typeof profileTemperature === "number" && Number.isFinite(profileTemperature)
           ? // The backend clamps to 0..1 (agent.rs / ai_commands.rs); match it so the
             // number shown in the picker is the number that gets sent.
             Math.min(1, Math.max(0, profileTemperature))
           : selectedModel.temperature;
-      const config = { ...selectedModel, maxTokens, temperature };
+      // Preserve the configured cap; Rust resolves defaults and model limits for this request.
+      const config = { ...selectedModel, temperature };
       if (stoppedEarly()) return;
       // A plain-chat round under 只读权限 has no business carrying the tool menu:
       // it invites a file/git round trip the question never asked for.
       const wantTools =
         !isDaily &&
         (sentMode === "project" || agent.permission !== "read");
-      await invoke("agent_run", {
-        req: {
+      const checkpointed = !!resume || (checkpointEnabled && !isDaily);
+      const active = await readySession(question);
+      if (resume && resume.sessionId !== active.id) throw new Error(t("context.historyChanged"));
+      const context = { sessionId: active.id, revision: active.revision, before };
+      if (stoppedEarly()) return;
+      const req = {
           config,
           // 主模型整轮失败时后端换它重试一次；没配置第二个同协议模型就为空
           fallbackConfig: fallbackModel || null,
@@ -807,14 +892,11 @@ export function useAskStream(opts: AskStreamOptions) {
           // 只发内容块历史：后端优先用 `messages`，再带一份 `history` 等于把同一份
           // 上下文序列化两遍（长会话里这份重复是实打实的 IPC 成本）。
           // 图片附件作为 image 块跟在正文后面：文本附件已经拼进 `user`，不重复发
-          messages: [
-            ...turnsToMessages(budget.turns, { stripImages: !selectedModel.vision }),
-            buildUserMessage(user, imageAttachmentsOf(sentAttachments)),
-          ],
+          messages: [buildUserMessage(user, imageAttachmentsOf(sentAttachments))],
           apps: agent.apps,
           permission: agent.permission,
           // The daily notes are already collected: the report needs no repo tools.
-          tools: wantTools,
+          tools: wantTools || !!resume,
           vision: agent.vision,
           diffConfirm: agent.diffConfirm,
           alwaysAllow: agent.alwaysAllow,
@@ -834,8 +916,16 @@ export function useAskStream(opts: AskStreamOptions) {
           mcpEnabled: agent.mcpEnabled,
           mcp: agent.mcp,
           mode: agent.mode ?? "",
-        },
-      });
+      };
+      if (checkpointed) {
+        await invoke("agent_run_task", {
+          req,
+          context,
+          task: { sessionId: active.id, taskId: resume?.taskId ?? crypto.randomUUID(), resume: !!resume, goal: question },
+        });
+      } else {
+        await invoke("agent_run_session", { req, context });
+      }
       if (streamIdRef.current === myGen) {
         lastQuestionRef.current = question;
         lastHistoryRef.current = baseHistory;
@@ -909,6 +999,11 @@ export function useAskStream(opts: AskStreamOptions) {
 
   /** Wipe the current chat (new-chat / deleting the active session). */
   const resetChat = useCallback(() => {
+    cursor.current = null;
+    startRef.current = 0;
+    setHistoryStart(0);
+    setLegacySummary("");
+    setContextInfo(null);
     setHistory([]);
     setPending(null);
     setAnswer("");
@@ -930,9 +1025,14 @@ export function useAskStream(opts: AskStreamOptions) {
   }, [setSelectedText, rememberPlan]);
 
   /** Point the chat state at a restored session's turns. */
-  const loadSession = useCallback((turns: QaTurn[]) => {
-    const compacted = compactSession(turns);
-    setHistory(compacted);
+  const loadSession = useCallback((id: string, page: AiHubTranscriptPage) => {
+    const turns = page.turns;
+    cursor.current = { id, revision: page.revision, pending: Promise.resolve(), failed: false };
+    startRef.current = page.start;
+    setHistoryStart(page.start);
+    setLegacySummary(page.legacy);
+    setContextInfo(page.context);
+    setHistory(turns);
     setSource(null);
     lastModeRef.current = null;
     lastDailyBriefRef.current = "";
@@ -941,8 +1041,7 @@ export function useAskStream(opts: AskStreamOptions) {
     rememberPlan([]);
     setAgentApproval(null);
     setStopping(false);
-    const verbatim = compacted.filter((t) => !t.digest);
-    const lastUser = [...verbatim].reverse().find((t) => t.role === "user");
+    const lastUser = [...turns].reverse().find((t) => t.role === "user");
     setAnswer("");
     setPending(null);
     setError(null);
@@ -951,9 +1050,7 @@ export function useAskStream(opts: AskStreamOptions) {
     setSelectedText("");
     // Point regenerate at the final exchange of this session.
     lastQuestionRef.current = lastUser?.content ?? "";
-    lastHistoryRef.current = verbatim.length >= 2
-      ? compacted.slice(0, -2)
-      : compacted.filter((t) => t.digest);
+    lastHistoryRef.current = turns.slice(0, -2);
   }, [setSelectedText]);
 
   /**
@@ -963,7 +1060,7 @@ export function useAskStream(opts: AskStreamOptions) {
    */
   const truncateTo = useCallback(
     (index: number): QaTurn[] => {
-      const compacted = compactSession(history.slice(0, Math.max(0, index)));
+      const compacted = history.slice(0, Math.max(0, index));
       setHistory(compacted);
       setSource(null);
       setAnswer("");
@@ -977,7 +1074,7 @@ export function useAskStream(opts: AskStreamOptions) {
       lastQuestionRef.current = lastUser?.content ?? "";
       lastHistoryRef.current =
         verbatim.length >= 2 ? compacted.slice(0, -2) : compacted.filter((t) => t.digest);
-      if (compacted.length > 0) persistRef.current(compacted, lastUser?.content ?? compacted[0].content);
+      saveSuffix(startRef.current + compacted.length, []);
       return compacted;
     },
     [history],
@@ -1009,16 +1106,54 @@ export function useAskStream(opts: AskStreamOptions) {
   };
 
   /** Record a local action (open a page / launch an app) without calling the model. */
-  const noteLocal = (question: string, answer: string) => {
+  const noteLocal = async (question: string, answer: string) => {
     if (busyRef.current) return;
     const q = question.trim();
     if (!q || !answer.trim()) return;
-    const nextTurns = appendTurn(history, q, answer.trim());
-    setHistory(nextTurns);
-    setInput("");
+    setBusySync(true);
+    try {
+      await readySession(q);
+      const nextTurns = appendTurn(history, q, answer.trim());
+      setHistory(nextTurns);
+      setInput("");
+      setError(null);
+      lastQuestionRef.current = q;
+      lastHistoryRef.current = history;
+      saveSuffix(startRef.current + history.length, nextTurns.slice(history.length));
+    } catch (error) { setError(String(error)); }
+    finally { setBusySync(false); }
+  };
+
+  const compact = async (focus: string) => {
+    if (busyRef.current) return;
+    const current = cursor.current;
+    if (!current || !history.length) { setError(t("context.nothing")); return; }
+    if (!selectedModel) { setError(t("noModel")); return; }
+    const id = `compact-${crypto.randomUUID()}`;
+    activeReqRef.current = id;
+    stopRequestedRef.current = false;
+    forceStopRef.current = null;
+    setBusySync(true);
+    setPhase("waiting");
     setError(null);
-    lastQuestionRef.current = q;
-    persistRef.current(nextTurns, q);
+    try {
+      await current.pending;
+      if (stopRequestedRef.current) return;
+      if (current.failed) throw new Error(t("context.historyChanged"));
+      const result = await invoke<AiHubContextInfo>("agent_session_compact", {
+        context: { sessionId: current.id, revision: current.revision, before: startRef.current + history.length },
+        config: selectedModel, requestId: id, contextTokens: agent.contextTokens ?? 0, focus,
+      });
+      if (cursor.current === current) setContextInfo(result);
+      return result;
+    } catch (error) {
+      if (!String(error).includes("AI_REQUEST_CANCELLED")) setError(String(error));
+    } finally {
+      activeReqRef.current = null;
+      setPhase("idle");
+      setStopping(false);
+      setBusySync(false);
+    }
   };
 
   const decideAgent = async (decision: AgentDecision, answer?: string) => {
@@ -1063,7 +1198,8 @@ export function useAskStream(opts: AskStreamOptions) {
     failedMode,
     retry,
     dismissError,
-    history,
+    history, historyStart, legacySummary, contextInfo, loadingOlder, loadOlder, compact,
+    flushTranscript, isBusy: () => busyRef.current,
     lastModeRef,
     lastQuestionRef,
     lastHistoryRef,

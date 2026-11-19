@@ -158,6 +158,10 @@ export interface WecomBotProfile {
   engine?: "tianji" | "dsh" | string;
   dshModel?: string;
   dshEffort?: string;
+  /** 天玑引擎选中的模型（AIModelConfig.id）；空 = 跟随「场景模型 → 默认模型」 */
+  tianjiModel?: string;
+  /** 天玑引擎的思考强度：low | medium | high；空 = 模型默认 */
+  tianjiThinking?: string;
   answerMode?: "auto" | "doc" | "doc_code" | "code" | "linked" | string;
   docDir?: string;
   enhanceDmEnabled?: boolean;
@@ -179,6 +183,10 @@ export interface WecomBotProfile {
   docgenEngine?: "inherit" | "tianji" | "dsh" | string;
   docgenDshModel?: string;
   docgenDshEffort?: string;
+  /** 文档更新（天玑档）的模型（AIModelConfig.id）；空 = 跟随「场景模型 → 默认模型」 */
+  docgenTianjiModel?: string;
+  /** 文档更新（天玑档）的思考强度：low | medium | high；空 = 模型默认 */
+  docgenTianjiThinking?: string;
   docgenRepoPath?: string;
   docgenDocDir?: string;
   docgenLookbackDays?: number;
@@ -343,6 +351,10 @@ export interface AppSettings {
   wecomDshModel?: string;
   /** DSH 引擎的思考强度；空 = provider 默认 */
   wecomDshEffort?: string;
+  /** 天玑引擎选中的模型（AIModelConfig.id）；空 = 跟随「场景模型 → 默认模型」 */
+  wecomTianjiModel?: string;
+  /** 天玑引擎的思考强度：low | medium | high；空 = 模型默认 */
+  wecomTianjiThinking?: string;
   /** 问答模式：auto 按问题意图分流（默认）/ doc 文档优先 / doc_code 文档+代码回退 / code 仅代码 */
   wecomAnswerMode?: "auto" | "doc" | "doc_code" | "code" | "linked" | string;
   /** 逆向文档目录（相对工作区），默认 doc */
@@ -385,6 +397,10 @@ export interface AppSettings {
   wecomDocgenDshModel?: string;
   /** 文档更新（DSH 档）的思考强度；空 = 沿用「回答设置」的 DSH 思考强度 */
   wecomDocgenDshEffort?: string;
+  /** 文档更新（天玑档）的模型（AIModelConfig.id）；空 = 跟随「场景模型 → 默认模型」 */
+  wecomDocgenTianjiModel?: string;
+  /** 文档更新（天玑档）的思考强度；空 = 模型默认 */
+  wecomDocgenTianjiThinking?: string;
   /** 文档自动更新自己的工作区（绝对路径）；空 = 沿用「回答设置」的工作区（与问答隔离，互不影响） */
   wecomDocgenRepoPath?: string;
   /** 文档自动更新自己的文档目录（相对工作区，默认 doc）；空 = 沿用「回答设置」的文档目录 */
@@ -569,9 +585,30 @@ export interface AiHubSession {
   title: string;
   /** Legacy task snapshot (always "none" after prompt-optimize removal). */
   task: string;
-  turns: AiHubTurn[];
+  total: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AiHubContextInfo {
+  covered: number;
+  compacted: boolean;
+  degraded?: boolean;
+  estimatedTokens: number | null;
+  inputBudget: number | null;
+  /** Full provider request breakdown; absent in older persisted usage snapshots. */
+  budget?: ModelBudget;
+  totalInputTokens?: number;
+  usageKind?: 'request' | 'compaction';
+}
+
+export interface AiHubTranscriptPage {
+  turns: AiHubTurn[];
+  start: number;
+  total: number;
+  revision: number;
+  legacy: string;
+  context: AiHubContextInfo;
 }
 
 /** A persisted JSON tool history record (input/output snapshot). */
@@ -899,6 +936,37 @@ export interface CloudflaredNamedProfile {
 
 export type AuthType = 'api' | 'token_plan';
 
+/** Explicit provider metadata, bound to one endpoint and model; never contains credentials. */
+export interface ModelCapabilityCache {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+}
+
+/** Budget resolved by the backend for both previews and desktop requests. */
+export interface ModelBudget {
+  model: string;
+  modelName: string;
+  modelWindow: number;
+  windowSource: 'manual' | 'provider' | 'catalog' | 'fallback';
+  windowReference?: string;
+  configuredLimit?: number;
+  effectiveWindow: number;
+  modelMaxOutputTokens?: number;
+  outputSource: 'provider' | 'catalog' | 'unknown';
+  outputReference?: string;
+  outputMode: 'auto' | 'manual';
+  requestedOutputTokens: number;
+  outputReserve: number;
+  schemaTokens: number;
+  inputBudget: number;
+  compactTrigger: number;
+  thinkingBudget?: number;
+  limitations: string[];
+}
+
 export interface AIModelConfig {
   id: string;
   name: string;
@@ -927,6 +995,10 @@ export interface AIModelConfig {
   model: string;
   temperature: number;
   maxTokens: number;
+  contextWindowTokens?: number;
+  /** Missing means manual for configurations created before automatic output budgeting. */
+  outputBudgetMode?: 'auto' | 'manual';
+  capabilityCache?: ModelCapabilityCache;
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;

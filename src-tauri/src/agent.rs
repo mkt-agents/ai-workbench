@@ -98,6 +98,11 @@ pub struct AgentRunRequest {
     /// The model accepts images; with 完全权限 this unlocks operating the computer.
     #[serde(default)]
     pub vision: bool,
+    /// 思考强度：`low` / `medium` / `high`；空 = provider 默认。
+    /// 只有 Anthropic（`thinking.budget_tokens`）与 OpenAI o 系 / gpt-5（`reasoning_effort`）认，
+    /// 其余线路静默忽略，见 `model_capability::thinking_kind`。
+    #[serde(default)]
+    pub thinking: Option<String>,
     /// 编辑档的写入也先给用户看 diff（设置项，默认关）。
     #[serde(default)]
     pub diff_confirm: bool,
@@ -440,7 +445,7 @@ pub(crate) fn tool_specs() -> Value {
           "parameters": obj(json!({ "from": s("Current path"), "to": s("New path") }), &["from", "to"]) },
         { "name": "run_command",
           "description": "Run a command to completion and return its output. cmd.exe by default, or PowerShell with shell=powershell. Read-only git commands run immediately. Not for servers or watchers: use start_process. Refused: shutdown, format, disk wipe, force push, hard reset.",
-          "parameters": obj(json!({ "command": s("Command line"), "shell": s("cmd (default) or powershell"), "cwd": s("Working directory (default: repo root)"), "timeout_secs": n("Up to 600, default 60 (git network commands 600)") }), &["command"]) },
+          "parameters": obj(json!({ "command": s("Command line"), "shell": s("cmd (default) or powershell"), "cwd": s("Working directory (default: repo root)"), "timeout_secs": n("Up to 600, default 60 (git network commands 600)"), "verification": { "type": "boolean", "description": "Set true when running this command to verify the task (tests, build or checks)." } }), &["command"]) },
         { "name": "start_process",
           "description": "Start a long-running command in the background (dev server, watcher, build --watch). Returns an id; read with process_output, stop with stop_process.",
           "parameters": obj(json!({ "command": s("Command line"), "shell": s("cmd (default) or powershell"), "cwd": s("Working directory") }), &["command"]) },
@@ -1322,6 +1327,7 @@ fn installed_apps() -> Vec<crate::app_launcher_commands::InstalledAppInfo> {
     use crate::app_launcher_commands::InstalledAppInfo;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
+
     static CACHE: Mutex<Option<(Instant, Vec<InstalledAppInfo>)>> = Mutex::new(None);
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((at, list)) = cache.as_ref() {
@@ -1577,6 +1583,55 @@ fn run_stop_hooks(hooks: &[crate::harness_config::HookEntry], scope: &Scope, per
     }
 }
 
+/// Side effects from stop hooks must finish before the task's final checkpoint.
+async fn finish_hooks(
+    hooks: &[crate::harness_config::HookEntry],
+    scope: &Scope,
+    permission: Permission,
+    checkpoint: Option<&crate::agent_task::TaskRun>,
+    plan_locked: bool,
+) -> Result<(), String> {
+    let Some(task) = checkpoint else {
+        run_stop_hooks(hooks, scope, permission);
+        return Ok(());
+    };
+    if plan_locked || permission == Permission::Read {
+        return Ok(());
+    }
+    let cwd = scope.root.clone().unwrap_or_else(|| scope.base.clone());
+    for hook in hooks.iter().filter(|hook| hook.event == "stop") {
+        checkpoint_hook(Some(task), hook.clone(), cwd.clone(), "stop".into()).await?;
+    }
+    Ok(())
+}
+
+async fn checkpoint_hook(
+    checkpoint: Option<&crate::agent_task::TaskRun>,
+    hook: crate::harness_config::HookEntry,
+    cwd: std::path::PathBuf,
+    payload: String,
+) -> Result<crate::agent_hooks::HookOutcome, String> {
+    let entry = checkpoint.map(|task| task.begin("hook", &hook.event, &[], false)).transpose()?;
+    let result = tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, &payload))
+        .await.map_err(|err| format!("hook 线程失败：{err}"));
+    if let (Some(task), Some(entry)) = (checkpoint, entry) {
+        let success = result.as_ref().ok().and_then(|outcome| outcome.ok.then_some(true));
+        task.result(entry, success, None, None)?;
+    }
+    result
+}
+
+async fn wait_with_task(
+    checkpoint: Option<&crate::agent_task::TaskRun>,
+    waiter: Waiter,
+    request_id: &str,
+) -> Result<Decision, String> {
+    if let Some(task) = checkpoint { task.approval()?; }
+    let result = await_waiter(waiter, request_id).await;
+    if let Some(task) = checkpoint { task.state("running")?; }
+    result
+}
+
 fn round_is_action(names: &[String]) -> bool {
     // 「算不算动作步」由 `agent_tools::TOOLS` 声明，别在这里再抄一份名字表。
     names.iter().any(|name| crate::agent_tools::counts_as_action(name))
@@ -1692,11 +1747,12 @@ fn plan_steps(args: &Value) -> Vec<Value> {
 }
 
 /// `update_plan`: broadcast the model's checklist, and tell it what the user now sees.
-fn update_plan(app: &AppHandle, request_id: &str, args: &Value) -> Result<String, String> {
+fn update_plan(app: &AppHandle, request_id: &str, args: &Value, task: Option<&crate::agent_task::TaskRun>) -> Result<String, String> {
     let steps = plan_steps(args);
     if steps.is_empty() {
         return Err("计划里没有有效步骤：steps 要是 [{ \"title\": …, \"status\": … }]。".into());
     }
+    if let Some(task) = task { task.plan(&steps)?; }
     let done = steps.iter().filter(|s| s["status"] == "done").count();
     let current = steps
         .iter()
@@ -1724,11 +1780,12 @@ fn gate_arg(name: &str, args: &Value) -> String {
 struct ToolOutput {
     text: String,
     image: Option<String>,
+    exit_code: Option<i32>,
 }
 
 impl From<String> for ToolOutput {
     fn from(text: String) -> Self {
-        Self { text, image: None }
+        Self { text, image: None, exit_code: None }
     }
 }
 
@@ -1738,6 +1795,7 @@ struct ToolCtx<'a> {
     protected: &'a Protected,
     apps: &'a [AgentAppShortcut],
     request_id: &'a str,
+    checkpoint: Option<&'a crate::agent_task::TaskRun>,
     /// `web_fetch` 只认这些域名（空 + open 档 = 放行公网）。
     web_allow: &'a [String],
     /// `off` / `allowlist` / `open`。
@@ -1746,7 +1804,7 @@ struct ToolCtx<'a> {
     web_search_key: &'a str,
     client: &'a reqwest::Client,
     /// 本轮可用的 MCP 服务与它们的工具（工具名 → 服务/工具是多对一查找，不靠拆字符串）。
-    mcp: &'a [(crate::mcp::McpServerSpec, Vec<crate::mcp::McpTool>)],
+    mcp: Vec<(crate::mcp::McpServerSpec, Vec<crate::mcp::McpTool>)>,
     /// 项目 hooks（`.ai-workbench/hooks.json`）；只读权限下不执行。
     hooks: &'a [crate::harness_config::HookEntry],
     /// 只读调用并发上限（设置项「并发读取」，关掉 = 1，逐个跑）。
@@ -1803,11 +1861,17 @@ async fn attach_mcp_tools(
     tools: &mut Vec<Value>,
     anthropic: bool,
     announce: bool,
-) -> Vec<(crate::mcp::McpServerSpec, Vec<crate::mcp::McpTool>)> {
+    checkpoint: Option<&crate::agent_task::TaskRun>,
+) -> Result<Vec<(crate::mcp::McpServerSpec, Vec<crate::mcp::McpTool>)>, String> {
     let mut out = Vec::new();
     for spec in servers {
+        let intent = checkpoint.map(|task| task.begin("mcp_connect", &spec.name, &[], false)).transpose()?;
         let probe = spec.clone();
         let listed = tokio::task::spawn_blocking(move || crate::mcp::list_tools(&probe)).await;
+        if let (Some(task), Some(intent)) = (checkpoint, intent) {
+            let success = listed.as_ref().ok().and_then(|result| result.is_ok().then_some(true));
+            task.result(intent, success, None, None)?;
+        }
         match listed {
             Ok(Ok(list)) if !list.is_empty() => {
                 for tool in &list {
@@ -1846,7 +1910,7 @@ async fn attach_mcp_tools(
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// `mcp_fs_read_file` → the server spec and the original tool name it came from.
@@ -1941,6 +2005,9 @@ async fn run_subagent(
             None,
             ctx.request_id,
             ctx.max_retries,
+            // 只读子代理不单独配思考强度：跟随默认，省得把预算叠两层。
+            None,
+            None,
         )
         .await
         .map_err(String::from)?;
@@ -2097,7 +2164,7 @@ async fn subagent_write_call(
                 false, // 子代理审批不提供「以后都允许」：一次放行就够，别常开
                 &QuestionUi::default(),
             );
-            let decision = await_waiter(waiter, ctx.request_id).await?;
+            let decision = wait_with_task(ctx.checkpoint, waiter, ctx.request_id).await?;
             set_attention(ctx.app, false);
             match decision {
                 Decision::Allow { .. } => {
@@ -2197,7 +2264,52 @@ async fn dispatch_tool(
     name: &str,
     args: &Value,
 ) -> Result<ToolOutput, String> {
-    let result = execute_tool(ctx, config, permission, name, args).await;
+    dispatch_tool_result(ctx, config, permission, name, args, None).await
+}
+
+fn review_tool(name: &str) -> bool {
+    matches!(name, "read_file" | "list_dir" | "find_files" | "grep" | "symbols" | "git_read" | "read_document"
+        | "read_table" | "table_query" | "update_plan" | "ask_user" | "exit_plan_mode")
+}
+
+async fn dispatch_tool_result(
+    ctx: &ToolCtx<'_>,
+    config: &AIModelConfig,
+    permission: Permission,
+    name: &str,
+    args: &Value,
+    prefetched: Option<Result<ToolOutput, String>>,
+) -> Result<ToolOutput, String> {
+    let entry = if let Some(task) = ctx.checkpoint {
+        task.check()?;
+        let verification = name == "run_command" && args.get("verification").and_then(Value::as_bool) == Some(true);
+        let readonly_command = name == "run_command" && !verification && command_is_readonly(&arg_str(args, "command"));
+        // Read-only subagents may use journaled hooks. Writable children dispatch their own actions.
+        if !review_tool(name) && name != "task" && !is_readonly_tool(name) && !readonly_command {
+            let paths = match name {
+                "write_file" | "edit_file" | "delete_path" => &["path"][..],
+                "move_path" => &["from", "to"][..],
+                _ => &[],
+            }.iter().filter_map(|key| {
+                let arg = arg_str(args, key);
+                (!arg.is_empty()).then(|| ctx.scope.resolve(&arg).ok()).flatten()
+            }).map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>();
+            let summary = if name == "run_command" {
+                arg_str(args, "command").chars().take(4000).collect()
+            } else { call_summary(name, args) };
+            Some(task.begin(name, &summary, &paths, verification)?)
+        } else { None }
+    } else { None };
+    let result = match prefetched {
+        Some(result) => result,
+        None => execute_tool(ctx, config, permission, name, args).await,
+    };
+    if let (Some(task), Some(entry)) = (ctx.checkpoint, entry) {
+        let code = result.as_ref().ok().and_then(|out| out.exit_code);
+        let success = result.as_ref().ok().map(|_| code.map_or(true, |code| code == 0));
+        let detail = result.as_ref().err().map(|e| clip(e, DETAIL_CAP));
+        task.result(entry, success, code, detail.as_deref())?;
+    }
     finalize_tool_result(ctx, permission, name, result).await
 }
 
@@ -2225,12 +2337,12 @@ async fn finalize_tool_result(
             for hook in post {
                 let cwd = cwd.clone();
                 let payload = payload.clone();
-                if let Ok(outcome) =
-                    tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, &payload)).await
-                {
-                    if !outcome.output.is_empty() {
+                match checkpoint_hook(ctx.checkpoint, hook, cwd, payload).await {
+                    Ok(outcome) if !outcome.output.is_empty() => {
                         extra.push_str(&format!("\n[hook] {}", outcome.output));
                     }
+                    Err(error) if ctx.checkpoint.is_some() => return Err(error),
+                    _ => {}
                 }
             }
             if !extra.is_empty() {
@@ -2267,9 +2379,7 @@ async fn execute_tool(
             let hook = hook.clone();
             let cwd = hook_cwd.clone();
             let payload = payload.clone();
-            let outcome = tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, &payload))
-                .await
-                .map_err(|e| format!("hook 线程失败：{e}"))?;
+            let outcome = checkpoint_hook(ctx.checkpoint, hook, cwd, payload).await?;
             if !outcome.ok {
                 return Err(format!("hook 拒绝执行 {name}：{}", outcome.output));
             }
@@ -2336,9 +2446,10 @@ async fn execute_tool(
                 return Err(reason);
             }
             let (args, rid) = (args.clone(), ctx.request_id.to_string());
-            tokio::task::spawn_blocking(move || proc::run_command(&cwd, &args, &rid))
+            let output = tokio::task::spawn_blocking(move || proc::run_command_result(&cwd, &args, &rid))
                 .await
-                .map_err(|e| e.to_string())??
+                .map_err(|e| e.to_string())??;
+            return Ok(ToolOutput { text: output.text, image: None, exit_code: Some(output.exit_code) });
         }
         "start_process" => {
             let cwd = command_cwd(ctx.scope, args)?;
@@ -2450,7 +2561,7 @@ async fn execute_tool(
             run_subagent(ctx, config, permission, &goal, &arg_str(args, "path")).await?
         }
         _ if name.starts_with("mcp_") => {
-            let (server, tool) = resolve_mcp(ctx.mcp, name)
+            let (server, tool) = resolve_mcp(&ctx.mcp, name)
                 .ok_or_else(|| format!("{name} 不在本轮启用的 MCP 工具里"))?;
             let args = args.clone();
             // MCP 调用是阻塞的整段会话：放到阻塞线程里，停止键照样能收住
@@ -2528,7 +2639,7 @@ async fn execute_tool(
             let (text, png) = await_cancellable(tokio::task::spawn_blocking(pc::screenshot), ctx.request_id)
                 .await?
                 .map_err(|e| e.to_string())??;
-            return Ok(ToolOutput { text, image: Some(png) });
+            return Ok(ToolOutput { text, image: Some(png), exit_code: None });
         }
         // 鼠标 / 键盘带 150-200ms 的等待和拖动：留在 tokio worker 上会卡住流式输出，
         // 也让停止键在这段时间里失灵。和 screenshot / wait 一样搬进后台线程。
@@ -2554,7 +2665,7 @@ async fn execute_tool(
             .await?
             .map_err(|e| e.to_string())??
         }
-        "update_plan" => update_plan(ctx.app, ctx.request_id, args)?,
+        "update_plan" => update_plan(ctx.app, ctx.request_id, args, ctx.checkpoint)?,
         _ => return Err(format!("未知工具 {name}")),
     };
     Ok(out.into())
@@ -2969,16 +3080,17 @@ struct RoundOutput {
 struct RoundError {
     message: String,
     switchable: bool,
+    context_overflow: bool,
 }
 
 impl RoundError {
     fn fatal(message: impl Into<String>) -> Self {
-        Self { message: message.into(), switchable: false }
+        Self { message: message.into(), switchable: false, context_overflow: false }
     }
 
     /// 网络 / 服务端 / 空回答：这个模型这条路走不通了，调用点可以换备用模型重来。
     fn retryable(message: impl Into<String>) -> Self {
-        Self { message: message.into(), switchable: true }
+        Self { message: message.into(), switchable: true, context_overflow: false }
     }
 }
 
@@ -3011,6 +3123,51 @@ fn retry_wait(attempt: u32, max_retries: u32, status: Option<u16>, retry_after: 
 /// Anthropic SSE is reassembled by `AnthropicStream` into a normal `message` body.
 /// A router that ignores `stream: true` and answers with plain JSON works the same.
 #[allow(clippy::too_many_arguments)] // 一轮请求的输入本身就是这些，调用点只有一处
+fn model_output_budget(config: &AIModelConfig, thinking: Option<&str>, output_ceiling: Option<i64>) -> (i64, Option<u32>) {
+    let ceiling = output_ceiling.unwrap_or(MAX_OUTPUT_TOKENS);
+    let mut max_tokens = {
+        let m = if config.max_tokens > 0 { config.max_tokens } else { 1536 };
+        // 4096 会把长回答 / 长工具参数直接截断（Anthropic 还要求必填）
+        // A desktop request already has a resolved reserve, including small provider caps.
+        // The legacy channels keep their existing minimum and fixed ceiling.
+        m.clamp(if output_ceiling.is_some() { 1 } else { 256 }, ceiling.max(1))
+    };
+    let thinking_kind = crate::model_capability::thinking_kind(&config.provider, &config.model);
+    // Anthropic：budget 必须严格小于 max_tokens，抬不上去就不开（宁可不思考，也别被 400）。
+    let mut thinking_budget = match thinking_kind {
+        Some(crate::model_capability::ThinkingKind::AnthropicBudget) => {
+            thinking.and_then(crate::model_capability::thinking_budget_tokens)
+        }
+        _ => None,
+    };
+    if let Some(budget) = thinking_budget {
+        match crate::model_capability::thinking_max_tokens(max_tokens, budget, ceiling) {
+            Some(next) => max_tokens = next,
+            None => thinking_budget = None,
+        }
+    }
+    (max_tokens, thinking_budget)
+}
+
+/// Resolve once for both compaction and the request body. Legacy entrypoints do not use this.
+fn desktop_request_budget(
+    config: &AIModelConfig,
+    configured: usize,
+    schema: usize,
+    thinking: Option<&str>,
+    overflow_retry_from: Option<usize>,
+) -> Result<(AIModelConfig, crate::model_budget::ModelBudget), String> {
+    let mut budget = crate::model_budget::resolve_budget(config, configured, schema, thinking)?;
+    if let Some(prior) = overflow_retry_from {
+        budget.input_budget = budget.input_budget.min(prior.saturating_mul(75) / 100);
+        budget.compact_trigger = budget.input_budget * 80 / 100;
+        budget.limitations.push("overflow_retry".into());
+    }
+    let mut request_config = config.clone();
+    request_config.max_tokens = budget.output_reserve as i64;
+    Ok((request_config, budget))
+}
+
 async fn model_turn(
     client: &reqwest::Client,
     config: &AIModelConfig,
@@ -3021,13 +3178,14 @@ async fn model_turn(
     stream: Option<&AppHandle>,
     request_id: &str,
     max_retries: u32,
+    // 思考强度 `low` / `medium` / `high`；不认这条参数的线路静默忽略。
+    thinking: Option<&str>,
+    output_ceiling: Option<i64>,
 ) -> Result<RoundOutput, RoundError> {
     let base = trim_trailing_slash(&config.base_url);
-    let max_tokens = {
-        let m = if config.max_tokens > 0 { config.max_tokens } else { 1536 };
-        // 4096 会把长回答 / 长工具参数直接截断（Anthropic 还要求必填）
-        m.clamp(256, MAX_OUTPUT_TOKENS)
-    };
+    let thinking_level = thinking.map(str::trim).filter(|level| !level.is_empty());
+    let thinking_kind = crate::model_capability::thinking_kind(&config.provider, &config.model);
+    let (max_tokens, thinking_budget) = model_output_budget(config, thinking_level, output_ceiling);
     // `base_body` is the request without cache breakpoints: the fallback when the
     // upstream rejects `cache_control` (older proxies, OpenAI-compatible shims).
     let (url, base_body) = if anthropic {
@@ -3048,6 +3206,10 @@ async fn model_turn(
         if stream.is_some() {
             body["stream"] = json!(true);
         }
+        if let Some(budget) = thinking_budget {
+            // extended thinking：不需要 temperature（Anthropic 也要求它保持默认）。
+            body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+        }
         (url, body)
     } else {
         let url = format!("{base}/chat/completions");
@@ -3060,6 +3222,15 @@ async fn model_turn(
         });
         if !tools.is_empty() {
             body["tools"] = json!(tools);
+        }
+        if thinking_kind == Some(crate::model_capability::ThinkingKind::OpenAiEffort) {
+            if let Some(level) = thinking_level {
+                // o 系 / gpt-5 只接受默认 temperature，带上反而会被拒。
+                if let Some(obj) = body.as_object_mut() {
+                    obj.remove("temperature");
+                }
+                body["reasoning_effort"] = json!(level.to_lowercase());
+            }
         }
         (url, body)
     };
@@ -3110,6 +3281,11 @@ async fn model_turn(
                 // 回到 base_body 会把 stream 也带回来，按当前决定重写一遍
                 body["stream"] = json!(body_stream);
                 continue;
+            }
+            if matches!(status.as_u16(), 400 | 413 | 422) && mentions_context(&text) {
+                let mut error = RoundError::fatal(friendly_model_error(status.as_u16(), &snippet));
+                error.context_overflow = true;
+                return Err(error);
             }
             if !tools.is_empty() && snippet.to_lowercase().contains("tool") {
                 return Err(RoundError::fatal(TOOLS_UNSUPPORTED));
@@ -3221,7 +3397,7 @@ async fn model_turn(
             }
             // 只有思考、没有正文：多半是输出上限被 reasoning 吃光（免费线路常见）。
             // 抬一档自己重试一次——成功就完全不用打扰用户；仍然失败才把原话报出去。
-            Err(e) if !tokens_boost_used && is_reasoning_only(&e) && max_tokens < MAX_OUTPUT_TOKENS => {
+            Err(e) if !tokens_boost_used && is_reasoning_only(&e) && output_ceiling.is_none() && max_tokens < MAX_OUTPUT_TOKENS => {
                 tokens_boost_used = true;
                 let boosted = (max_tokens * 2).max(4_096).min(MAX_OUTPUT_TOKENS);
                 body["max_tokens"] = json!(boosted);
@@ -3284,7 +3460,19 @@ async fn review_action(
         ])
     };
     // 审查这一路短平快：重试只会拖时间，固定给 1 次（不含首次）
-    let call = model_turn(client, config, anthropic, &messages, REVIEW_SYSTEM, &[], None, request_id, 1);
+    let call = model_turn(
+        client,
+        config,
+        anthropic,
+        &messages,
+        REVIEW_SYSTEM,
+        &[],
+        None,
+        request_id,
+        1,
+        None,
+        None,
+    );
     match tokio::time::timeout(REVIEW_WAIT, call).await {
         Ok(Ok(out)) => parse_review_verdict(&out.turn.text),
         Ok(Err(e)) => (false, format!("审查失败：{}", clip(&e.message, 120))),
@@ -3294,7 +3482,7 @@ async fn review_action(
 
 /// Service folders under a workspace root, relative to it. Empty when `root` is
 /// itself a repository (then git already works from the root).
-fn workspace_services(root: &std::path::Path, services: &[String]) -> Vec<String> {
+pub(crate) fn workspace_services(root: &std::path::Path, services: &[String]) -> Vec<String> {
     if root.join(".git").exists() {
         return Vec::new();
     }
@@ -3561,14 +3749,101 @@ async fn prefetch_tasks(
     Ok(prefetched)
 }
 
+pub(crate) async fn summarize_context(
+    client: &reqwest::Client,
+    config: &AIModelConfig,
+    request_id: &str,
+    system: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let anthropic = config.provider.eq_ignore_ascii_case("anthropic");
+    let messages = crate::agent_protocol::provider_messages(
+        &[crate::agent_protocol::Message::text("user", prompt)], anthropic, system,
+    );
+    let (request_config, budget) = desktop_request_budget(config, 0, 0, None, None)?;
+    let output = model_turn(client, &request_config, anthropic, &Value::Array(messages), system, &[], None, request_id, 0, None, Some(budget.output_reserve as i64)).await?;
+    let text = strip_think_tags(&output.turn.text).trim().to_owned();
+    if !output.turn.calls.is_empty() || text.is_empty() { return Err("CONTEXT_SUMMARY_EMPTY".into()); }
+    Ok(text)
+}
+
+#[tauri::command]
+pub(crate) async fn agent_run_session(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    req: AgentRunRequest,
+    context: crate::agent_transcript::ContextRef,
+) -> Result<(), String> {
+    crate::agent_transcript::desktop(&window)?;
+    agent_run_inner(app, req, None, None, false, Some(context)).await
+}
+
+#[tauri::command]
+pub(crate) async fn agent_session_compact(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    context: crate::agent_transcript::ContextRef,
+    config: AIModelConfig,
+    request_id: String,
+    context_tokens: usize,
+    focus: String,
+) -> Result<crate::agent_transcript::ContextInfo, String> {
+    crate::agent_transcript::desktop(&window)?;
+    if crate::cancellation::is_active(&request_id) { return Err("TASK_ALREADY_RUNNING".into()); }
+    let _guard = CancelGuard::new(&request_id);
+    let snapshot = crate::agent_transcript::snapshot(&app, &context, false).await?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(crate::config::GENERATE_CONNECT_TIMEOUT_SECS))
+        .read_timeout(Duration::from_secs(crate::config::GENERATE_STREAM_IDLE_SECS))
+        .build().map_err(|error| error.to_string())?;
+    crate::agent_compaction::Conversation::new(context, snapshot)
+        .manual(&app, &client, &config, context_tokens, &request_id, &focus).await
+}
+
 #[tauri::command]
 pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), String> {
-    agent_run_inner(app, req, None).await
+    agent_run_inner(app, req, None, None, false, None).await
+}
+
+#[tauri::command]
+pub(crate) async fn agent_run_task(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    req: AgentRunRequest,
+    task: crate::agent_task::TaskRequest,
+    context: Option<crate::agent_transcript::ContextRef>,
+) -> Result<(), String> {
+    if window.label() != "ai-hub" { return Err("TASK_DESKTOP_ONLY".into()); }
+    if context.as_ref().is_some_and(|context| context.session_id != task.session_id) {
+        return Err("TRANSCRIPT_SESSION_MISMATCH".into());
+    }
+    let request_id = req.request_id.clone();
+    if crate::cancellation::is_active(&request_id) { return Err("TASK_ALREADY_RUNNING".into()); }
+    let _cancel = CancelGuard::new(&request_id);
+    let startup_app = app.clone();
+    let (req, checkpoint, review) = tokio::task::spawn_blocking(move || {
+        let mut req = req;
+        let (checkpoint, review) = crate::agent_task::TaskRun::start(&startup_app, &task, &mut req)?;
+        Ok::<_, String>((req, checkpoint, review))
+    }).await.map_err(|err| err.to_string())??;
+    let result = agent_run_inner(app.clone(), req, None, Some(&checkpoint), review, context).await;
+    let reason = match &result {
+        Err(error) if error.contains("AI_REQUEST_CANCELLED") => "cancelled",
+        Err(error) if error.contains("TASK_WORKSPACE_CHANGED_DURING_REVIEW") => "review_required",
+        Err(error) if error.contains("TASK_STORAGE") => "storage_error",
+        Err(_) if checkpoint.stop_reason() == "model_error" => "model_error",
+        Err(_) => "failed",
+        Ok(()) => checkpoint.stop_reason(),
+    };
+    let saved = tokio::task::spawn_blocking(move || checkpoint.finish(reason))
+        .await.map_err(|e| e.to_string())?;
+    if let Err(ref error) = saved { emit_err(&app, &request_id, error); }
+    saved.and(result)
 }
 
 /// 内部文档任务入口；范围由宿主传入，不接受前端的权限扩展字段。
 pub(crate) async fn agent_run_document(app: AppHandle, req: AgentRunRequest, doc_dir: String) -> Result<(), String> {
-    agent_run_inner(app, req, Some(doc_dir)).await
+    agent_run_inner(app, req, Some(doc_dir), None, false, None).await
 }
 
 fn document_tool_allowed(
@@ -3596,9 +3871,24 @@ fn document_tool_allowed(
     }
 }
 
-async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Option<String>) -> Result<(), String> {
+async fn agent_run_inner(
+    app: AppHandle,
+    req: AgentRunRequest,
+    document_dir: Option<String>,
+    checkpoint: Option<&crate::agent_task::TaskRun>,
+    mut review_locked: bool,
+    context: Option<crate::agent_transcript::ContextRef>,
+) -> Result<(), String> {
     let request_id = req.request_id.clone();
-    let _guard = CancelGuard::new(&request_id);
+    let _guard = checkpoint.is_none().then(|| CancelGuard::new(&request_id));
+    if is_cancelled(&request_id) { return Err(cancelled_message()); }
+    let mut conversation = if let Some(context) = context {
+        let checkpoint_only = checkpoint.is_some_and(|task| task.is_resuming());
+        let snapshot = crate::agent_transcript::snapshot(&app, &context, checkpoint_only).await?;
+        Some(crate::agent_compaction::Conversation::new(context, snapshot))
+    } else {
+        None
+    };
     let _approvals = ApprovalCleanup { request_id: request_id.clone() };
     let started = Instant::now();
     if req.config.base_url.trim().is_empty() || req.config.model.trim().is_empty() {
@@ -3639,6 +3929,7 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
     let anthropic = req.config.provider.to_lowercase() == "anthropic";
     // 完全权限：整台电脑（受保护目录除外）；其它档位只在仓库里
     let scope = Scope::new(root.clone(), permission == Permission::Full);
+    let review_scope = Scope::new(root.clone(), false);
     let protected = Protected::from_env();
     let web_tier = normalize_web_tier(&req.web_tier);
     let reach = Reach {
@@ -3658,13 +3949,20 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
     }
     let hide_abs = req.request_id.starts_with("wecom-");
     let mut system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach, hide_abs));
+    if checkpoint.is_some() {
+        system.push_str("\n完成代码修改后运行合适的测试、构建或检查，并在 run_command 标注 verification=true。未运行验证或验证失败时明确说明。");
+    }
     // 上下文管道：项目文档 / 长期记忆 / 技能索引 / `@` 引用，全部只读且不越出工作区。
     let context_bundle = crate::agent_context::collect(&harness_config, root.as_deref(), &last_ask);
     if !context_bundle.text.is_empty() {
         system.push_str(&context_bundle.text);
     }
     // 真·计划闸门：先只读规划，用户批准 `exit_plan_mode` 后再升档。
-    let mut plan_locked = req.plan_first && req.tools;
+    let mut plan_locked = (req.plan_first && req.tools) || review_locked;
+    let mut review_plan_ready = false;
+    if review_locked {
+        system.push_str("\n\n【续跑核对】工作区已变化或动作结果不明。先在原工作区核对文件，再用 update_plan 和 exit_plan_mode 告诉用户你发现的情况和拟执行的新方案。批准前只可用本地只读与计划工具。");
+    }
     if plan_locked {
         system.push_str(
             "\n\n【计划模式】这一轮先只读调研并调用 `update_plan` 列出步骤，再调用 `exit_plan_mode` 等用户批准。\
@@ -3739,19 +4037,20 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
     // 计划闸门解锁后要恢复的完整名单（含模式 / 技能 / 搜索过滤）。
     let full_tool_names = tool_names.clone();
     if plan_locked {
-        tool_names.retain(|n| crate::agent_tools::is_plan_phase_tool(n));
+        tool_names.retain(|name| if review_locked { review_tool(name) } else { crate::agent_tools::is_plan_phase_tool(name) });
     }
     let mut tools = provider_tools(&tool_names, anthropic);
     // MCP：工具名是运行时的，不在这张静态表里；列一次、追加进 tools，然后按名字查找
     // 总开关关掉时连进程都不起：这一轮就是没有 mcp_* 工具
     // 计划锁定期间仍列服务（ctx 要能解析），但不把 mcp_* 塞进模型可见的 tools。
     // 文档任务（逆向工程）同样受总开关控制：只有用户显式开启并勾选服务才会列工具。
-    let mcp_servers = if req.mcp_enabled && !req.mcp.is_empty() {
+    let mut mcp_deferred = checkpoint.is_some() && plan_locked && req.mcp_enabled && !req.mcp.is_empty();
+    let mcp_servers = if req.mcp_enabled && !req.mcp.is_empty() && !mcp_deferred {
         if plan_locked {
             let mut hidden = Vec::new();
-            attach_mcp_tools(&app, &request_id, &req.mcp, &mut hidden, anthropic, false).await
+            attach_mcp_tools(&app, &request_id, &req.mcp, &mut hidden, anthropic, false, None).await?
         } else {
-            attach_mcp_tools(&app, &request_id, &req.mcp, &mut tools, anthropic, true).await
+            attach_mcp_tools(&app, &request_id, &req.mcp, &mut tools, anthropic, true, checkpoint).await?
         }
     } else {
         Vec::new()
@@ -3767,18 +4066,19 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
     } else {
         req.result_cap.clamp(2_000, 64_000)
     };
-    let ctx = ToolCtx {
+    let mut ctx = ToolCtx {
         app: &app,
-        scope: &scope,
+        scope: if review_locked { &review_scope } else { &scope },
         protected: &protected,
         apps: &req.apps,
         request_id: &request_id,
+        checkpoint,
         web_allow: &req.web_allow,
         web_tier,
         web_search_provider: req.web_search_provider.trim(),
         web_search_key: req.web_search_key.trim(),
         client: &client,
-        mcp: &mcp_servers,
+        mcp: mcp_servers,
         hooks: &harness_config.hooks,
         result_cap,
         max_parallel: if req.parallel_reads { MAX_PARALLEL } else { 1 },
@@ -3830,7 +4130,10 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
         // 协议不同就不能中途换：messages / tools 已经按主模型的协议拼好了
         .filter(|c| (c.provider.to_lowercase() == "anthropic") == anthropic);
     let mut fell_back = false;
+    let mut overflow_retry_from: Option<usize> = None;
+    let mut degraded_noticed = false;
     loop {
+        if let Some(task) = checkpoint { task.check()?; }
         if rounds >= MAX_ROUNDS || action_steps >= MAX_ACTION_STEPS {
             break;
         }
@@ -3841,59 +4144,111 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
             return Err(msg);
         }
         prune_images(&mut messages, KEEP_SHOTS);
-        // 上下文预算：先压工具结果，再丢最老的轮次，最后压系统提示；工具 schema 不动
+        // Resolve the actual model, tool schema and output reserve together on every attempt.
+        // This includes fallback models and the tool-free retry after tool degradation.
         let schema_tokens =
-            crate::agent_budget::estimate_tokens(&serde_json::to_string(&tools).unwrap_or_default());
-        let trim = crate::agent_budget::fit_context(
-            &mut system,
-            &mut messages,
-            schema_tokens,
-            context_tokens,
-            crate::agent_budget::KEEP_ROUNDS,
-        );
-        // 来源行：这一轮实际带了多少内容、占预算多少、压过几次
-        stats.context_chars = crate::agent_budget::context_chars(&system, &messages);
-        stats.budget_ratio = (trim.after as f32 / context_tokens as f32).clamp(0.0, 1.0);
-        if trim.any() {
-            stats.trims += 1;
-            if !anthropic {
-                // OpenAI 协议把系统提示放在第一条消息里，裁剪后要同步回去
-                if let Some(first) = messages.first_mut() {
-                    if first.get("role").and_then(|v| v.as_str()) == Some("system") {
-                        first["content"] = json!(system);
+            if tools.is_empty() { 0 } else { crate::agent_budget::estimate_tokens(&serde_json::to_string(&tools).unwrap_or_default()) };
+        let desktop_budget = conversation.as_ref().map(|_| {
+            desktop_request_budget(&config, req.context_tokens, schema_tokens, req.thinking.as_deref(), overflow_retry_from)
+        }).transpose().map_err(|message| {
+            emit_err(&app, &request_id, &message);
+            message
+        })?;
+        let output_ceiling = desktop_budget.as_ref().map(|(_, budget)| budget.output_reserve as i64);
+        let request_config = desktop_budget.as_ref().map_or(&config, |(request_config, _)| request_config);
+        let request_thinking = if desktop_budget.as_ref().is_some_and(|(_, budget)| budget.limitations.iter().any(|reason| reason == "thinking_disabled")) {
+            None
+        } else {
+            req.thinking.as_deref()
+        };
+        let (projected_messages, submitted_tokens) = if let Some(history) = &mut conversation {
+            let resolved = &desktop_budget.as_ref().expect("conversation budget resolved").1;
+            let budget = resolved.input_budget;
+            let mut projected = history.prepare(&app, &client, &config, &request_id, req.context_tokens, anthropic, &system, &messages, budget, overflow_retry_from.is_some()).await?;
+            projected.info = projected.info.with_budget(resolved.clone());
+            let submitted = projected.info.estimated_tokens.unwrap_or_default();
+            if overflow_retry_from.is_some_and(|prior| submitted >= prior) {
+                return Err("CONTEXT_REQUIRED_TOO_LARGE: 请减少当前输入、附件或项目上下文后重试。".into());
+            }
+            stats.context_chars = crate::agent_budget::context_chars(&system, &projected.messages);
+            stats.budget_ratio = (submitted as f32 / budget.max(1) as f32).clamp(0.0, 1.0);
+            stats.trims += usize::from(projected.before > submitted);
+            history.record_usage(&app, &projected.info).await;
+            let mut payload = serde_json::to_value(&projected.info).unwrap_or_default();
+            payload["id"] = json!(request_id);
+            payload["degraded"] = json!(projected.degraded);
+            let _ = app.emit("agent-context-state", payload);
+            if projected.degraded && !degraded_noticed {
+                degraded_noticed = true;
+                emit_step(&app, &request_id, "notice", "info", "上下文已使用本地裁剪，原始对话仍可查看", "");
+            }
+            (projected.messages, submitted)
+        } else {
+            let trim = crate::agent_budget::fit_context(
+                &mut system,
+                &mut messages,
+                schema_tokens,
+                context_tokens,
+                crate::agent_budget::KEEP_ROUNDS,
+            );
+            // 来源行：这一轮实际带了多少内容、占预算多少、压过几次
+            stats.context_chars = crate::agent_budget::context_chars(&system, &messages);
+            stats.budget_ratio = (trim.after as f32 / context_tokens as f32).clamp(0.0, 1.0);
+            if trim.any() {
+                stats.trims += 1;
+                if !anthropic {
+                    // OpenAI 协议把系统提示放在第一条消息里，裁剪后要同步回去
+                    if let Some(first) = messages.first_mut() {
+                        if first.get("role").and_then(|v| v.as_str()) == Some("system") {
+                            first["content"] = json!(system);
+                        }
                     }
                 }
+                if !trim_noticed {
+                    trim_noticed = true;
+                    emit_step(
+                        &app,
+                        &request_id,
+                        "notice",
+                        "info",
+                        "上下文接近上限，已压缩早期内容",
+                        &format!("约 {} → {} token", trim.before, trim.after),
+                    );
+                }
             }
-            if !trim_noticed {
-                trim_noticed = true;
-                emit_step(
-                    &app,
-                    &request_id,
-                    "notice",
-                    "info",
-                    "上下文接近上限，已压缩早期内容",
-                    &format!("约 {} → {} token", trim.before, trim.after),
-                );
-            }
-        }
+            (messages.clone(), 0)
+        };
         let round = model_turn(
             &client,
-            &config,
+            request_config,
             anthropic,
-            &Value::Array(messages.clone()),
+            &Value::Array(projected_messages),
             &system,
             &tools,
             // 设置项「Anthropic 流式」关掉时按普通请求发：有些网关的 SSE 会中途断
             if anthropic && !req.anthropic_stream { None } else { Some(&app) },
             &request_id,
             ctx.max_retries,
+            request_thinking,
+            output_ceiling,
         )
         .await;
         let round = match round {
+            Err(error) if error.context_overflow && conversation.is_some() && overflow_retry_from.is_none() => {
+                overflow_retry_from = Some(submitted_tokens);
+                rounds -= 1;
+                continue;
+            }
+            Err(error) if error.context_overflow && conversation.is_some() => {
+                let msg = "CONTEXT_REQUIRED_TOO_LARGE: 请减少当前输入、附件或项目上下文后重试。";
+                emit_err(&app, &request_id, msg);
+                return Err(msg.into());
+            }
             Err(e) if e.message == TOOLS_UNSUPPORTED && tools_enabled => {
                 // 模型不支持工具调用：去掉 tools 重发，这一轮只回答
                 tools_enabled = false;
                 tools.clear();
+                if let Some(task) = checkpoint { task.set_stop_reason("tools_unavailable"); }
                 emit_step(&app, &request_id, "notice", "info", "当前模型不支持工具调用，本轮只回答", "");
                 rounds -= 1;
                 continue;
@@ -3910,17 +4265,20 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                         &e.message,
                     );
                     config = next;
+                    overflow_retry_from = None;
                     fell_back = true;
                     rounds -= 1;
                     continue;
                 }
                 None => {
+                    if let Some(task) = checkpoint { task.set_stop_reason("model_error"); }
                     emit_err(&app, &request_id, &e.message);
                     return Err(e.message);
                 }
             },
-            Ok(r) => r,
+            Ok(r) => { overflow_retry_from = None; r },
             Err(e) => {
+                if let Some(task) = checkpoint { task.set_stop_reason("model_error"); }
                 let msg = if e.message == TOOLS_UNSUPPORTED {
                     "模型拒绝了这次请求（工具调用）。".to_string()
                 } else {
@@ -3936,10 +4294,9 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
             // 用真实 usage 校准字符→token 的估算系数：这轮发出去的（system + 对话 + 工具表）
             // 加上模型的回答都按字符估，provider 报的总量是分母。裁剪决策从此越用越准。
             let answer = if round.turn.text.is_empty() { round.streamed.as_str() } else { round.turn.text.as_str() };
-            let estimated = crate::agent_budget::estimate_tokens(&system)
-                + crate::agent_budget::messages_tokens(&messages)
-                + schema_tokens
-                + crate::agent_budget::estimate_tokens(answer);
+            let estimated = if conversation.is_some() { submitted_tokens + schema_tokens } else {
+                crate::agent_budget::estimate_tokens(&system) + crate::agent_budget::messages_tokens(&messages) + schema_tokens
+            } + crate::agent_budget::estimate_tokens(answer);
             crate::agent_budget::calibrate_from_usage(estimated, (p + c) as usize);
         }
         stats.cache_hit += round.cache_hit;
@@ -3956,12 +4313,13 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
         }
         if turn.calls.is_empty() {
             if final_text.trim().is_empty() {
+                if let Some(task) = checkpoint { task.set_stop_reason("model_error"); }
                 let msg = "这个模型没有返回文本，也没有调用工具。";
                 emit_err(&app, &request_id, msg);
                 return Err(msg.into());
             }
             crate::agent_session_log::log_assistant(&request_id, &final_text);
-            run_stop_hooks(&harness_config.hooks, &scope, permission);
+            finish_hooks(&harness_config.hooks, &scope, permission, checkpoint, plan_locked).await?;
             emit_done(
                 &app,
                 &request_id,
@@ -3995,7 +4353,9 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
         }
         let mut tool_results: Vec<(String, ToolOutput)> = Vec::new();
         // 只读调用先并发跑掉（`plan_batches` 只取开头连续的合格调用）；写类与要审批的仍串行
-        let mut prefetched = match prefetch_readonly(&ctx, &turn.calls, permission).await {
+        let reads = if review_locked { Ok(Prefetched::default()) }
+            else { prefetch_readonly(&ctx, &turn.calls, permission).await };
+        let mut prefetched = match reads {
             Ok(v) => v,
             Err(cancelled) => {
                 emit_err(&app, &request_id, &cancelled);
@@ -4003,7 +4363,13 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
             }
         };
         // 只读子代理 `task` 也并发：结论仍按 tool_use 顺序回灌
-        let tasks = match prefetch_tasks(&ctx, &config, &turn.calls, permission).await {
+        // Writable tasks and any hooks need to enter the journaled dispatch before they can run.
+        let tasks = if (checkpoint.is_some() && (plan_locked || ctx.subagent_write || !ctx.hooks.is_empty())) || review_locked {
+            Ok(Prefetched::default())
+        } else {
+            prefetch_tasks(&ctx, &config, &turn.calls, permission).await
+        };
+        let tasks = match tasks {
             Ok(v) => v,
             Err(cancelled) => {
                 emit_err(&app, &request_id, &cancelled);
@@ -4037,8 +4403,13 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                 emit_err(&app, &request_id, &msg);
                 return Err(msg);
             }
+            if review_locked && !review_tool(&call.name) {
+                p.skip = Some("续跑核对未批准，仅可调用本地只读及计划工具。".into());
+                prepared.push(p);
+                continue;
+            }
             // MCP 的名字是运行时来的，不在静态表里：先查本轮列到的这张表
-            let is_mcp = resolve_mcp(&mcp_servers, &call.name).is_some();
+            let is_mcp = resolve_mcp(&ctx.mcp, &call.name).is_some();
             if !is_mcp && !known_tools.contains(&call.name.as_str()) {
                 let reason = unknown_tool_reason(&call.name, &tool_names);
                 if unknown_shown.insert(call.name.clone()) {
@@ -4163,6 +4534,11 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                 p.preview = if q.is_empty() { p.summary.clone() } else { q };
                 // 刚发的 running 会被审批卡盖住；提问本身不算「正在执行」
             } else if call.name == "exit_plan_mode" {
+                if review_locked && !review_plan_ready {
+                    p.skip = Some("续跑审批前请先调用 update_plan 保存核对后的新计划，再请求批准。".into());
+                    prepared.push(p);
+                    continue;
+                }
                 if !plan_locked {
                     p.forced_result = Some("当前不在计划模式，无需批准；可以直接执行。".into());
                     p.needs_confirm = false;
@@ -4222,7 +4598,7 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                 false,
                 &question,
             );
-            let decision = match await_waiter(waiter, &request_id).await {
+            let decision = match wait_with_task(checkpoint, waiter, &request_id).await {
                 Ok(v) => v,
                 Err(e) => {
                     emit_err(&app, &request_id, &e);
@@ -4252,13 +4628,23 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                             .map(|a| !a.contains("继续改") && !a.contains("改方案"))
                             .unwrap_or(true);
                         if approved {
+                            if review_locked {
+                                if let Some(task) = checkpoint { task.approve_review()?; }
+                                review_locked = false;
+                                ctx.scope = &scope;
+                            }
                             plan_locked = false;
                             tool_names = full_tool_names.clone();
                             tools = provider_tools(&tool_names, anthropic);
                             // 把本轮已列好的 MCP 工具补进可见表（进程池仍热着）。
-                            for (spec, list) in &mcp_servers {
-                                for tool in list {
-                                    tools.push(crate::mcp::provider_spec(&spec.name, tool, anthropic));
+                            if mcp_deferred {
+                                ctx.mcp = attach_mcp_tools(&app, &request_id, &req.mcp, &mut tools, anthropic, true, checkpoint).await?;
+                                mcp_deferred = false;
+                            } else {
+                                for (spec, list) in &ctx.mcp {
+                                    for tool in list {
+                                        tools.push(crate::mcp::provider_spec(&spec.name, tool, anthropic));
+                                    }
                                 }
                             }
                             let note = answer.unwrap_or_else(|| "批准执行".into());
@@ -4367,7 +4753,7 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                     .collect();
                 emit_approval_batch(&app, &request_id, &patches, can_remember);
             }
-            let decision = match await_waiter(waiter, &request_id).await {
+            let decision = match wait_with_task(checkpoint, waiter, &request_id).await {
                 Ok(v) => v,
                 Err(e) => {
                     emit_err(&app, &request_id, &e);
@@ -4420,12 +4806,16 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                 continue;
             }
             // 并发预取只跑了 execute；仍要补 post_hooks + 结果预算。
-            let result = match prefetched.done.remove(&p.index) {
-                Some(done) => finalize_tool_result(&ctx, permission, &p.name, done).await,
-                None => dispatch_tool(&ctx, &config, permission, &p.name, &p.args).await,
-            };
+            let tool_permission = if checkpoint.is_some() && plan_locked { Permission::Read } else { permission };
+            let result = dispatch_tool_result(
+                &ctx, &config, tool_permission, &p.name, &p.args, prefetched.done.remove(&p.index),
+            ).await;
+            if let Some(task) = checkpoint { task.check()?; }
+            if review_locked && p.name == "update_plan" && result.is_ok() {
+                review_plan_ready = true;
+            }
             let failed = match &result {
-                Ok(out) => command_output_failed(&out.text),
+                Ok(out) => out.exit_code.map(|code| code != 0).unwrap_or_else(|| command_output_failed(&out.text)),
                 Err(_) => true,
             };
             match result {
@@ -4458,6 +4848,7 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
                 }
                 Err(err) if err == crate::agent_computer::FAILSAFE_MESSAGE => {
                     // 紧急停止：不再给模型机会继续动鼠标键盘
+                    if let Some(task) = checkpoint { task.set_stop_reason("emergency_stop"); }
                     emit_step_full(&app, &request_id, &p.name, "denied", &p.summary, &err, Some(&p.arg_text));
                     emit_text(&app, &request_id, &format!("\n\n{err}"));
                     emit_done(
@@ -4495,7 +4886,10 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
     }
     let msg = limit_message(action_steps >= MAX_ACTION_STEPS, &notes);
     emit_text(&app, &request_id, &msg);
-    run_stop_hooks(&harness_config.hooks, &scope, permission);
+    finish_hooks(&harness_config.hooks, &scope, permission, checkpoint, plan_locked).await?;
+    if let Some(task) = checkpoint {
+        task.set_stop_reason(if action_steps >= MAX_ACTION_STEPS { "action_limit" } else { "round_limit" });
+    }
     emit_done(
         &app,
         &request_id,
@@ -4525,6 +4919,87 @@ mod tests {
     use std::fs;
     use std::process::Command;
     use std::time::{Duration, Instant};
+
+    fn budget_test_config() -> crate::ai_commands::AIModelConfig {
+        serde_json::from_value(json!({
+            "name":"Budget fixture", "provider":"custom", "apiKey":"", "baseUrl":"http://localhost/v1",
+            "model":"budget-fixture", "temperature":0.0, "maxTokens":4096, "isDefault":false,
+            "contextWindowTokens":48000, "outputBudgetMode":"auto"
+        })).unwrap()
+    }
+
+    #[test]
+    fn desktop_budget_recomputes_for_model_tools_and_overflow() {
+        let config = budget_test_config();
+        let (request, budget) = super::desktop_request_budget(&config, 0, 1000, None, None).unwrap();
+        assert_eq!(budget.output_reserve, 8192);
+        assert_eq!(request.max_tokens, 8192);
+        assert_eq!(budget.input_budget, 48000 - 1000 - 8192);
+        assert_eq!(super::model_output_budget(&request, None, Some(budget.output_reserve as i64)).0, budget.output_reserve as i64);
+        // A retry after the provider rejects tools must free the actual schema allocation.
+        let (_, without_tools) = super::desktop_request_budget(&config, 0, 0, None, None).unwrap();
+        assert_eq!(without_tools.input_budget, budget.input_budget + 1000);
+        // Switching to a smaller fallback must not carry the primary model's window or output.
+        let mut fallback = config.clone();
+        fallback.model = "small-fallback".into();
+        fallback.context_window_tokens = Some(4096);
+        let (fallback_request, fallback_budget) = super::desktop_request_budget(&fallback, 0, 200, None, None).unwrap();
+        assert_eq!(fallback_budget.effective_window, 4096);
+        assert_eq!(fallback_budget.output_reserve, 4096 / 3);
+        assert_eq!(fallback_request.max_tokens, (4096 / 3) as i64);
+        let (_, retry) = super::desktop_request_budget(&fallback, 0, 200, None, Some(2000)).unwrap();
+        assert_eq!(retry.input_budget, 1500);
+        assert_eq!(retry.compact_trigger, 1200);
+        assert!(retry.limitations.iter().any(|reason| reason == "overflow_retry"));
+        // Non-desktop channels retain their current output policy.
+        let mut legacy = config.clone();
+        legacy.max_tokens = 32000;
+        assert_eq!(super::model_output_budget(&legacy, None, None).0, 8192);
+    }
+
+    #[tokio::test]
+    async fn desktop_model_request_sends_the_displayed_output_reserve() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (mode, requested, window, expected) in [("auto", 4096, 48000, 8192), ("manual", 32768, 1000000, 32768), ("auto", 4096, 4096, 1365)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut received = Vec::new();
+                let mut buffer = [0u8; 4096];
+                let header_end = loop {
+                    let n = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(n, 0);
+                    received.extend_from_slice(&buffer[..n]);
+                    if let Some(at) = received.windows(4).position(|part| part == b"\r\n\r\n") { break at + 4; }
+                };
+                let headers = String::from_utf8_lossy(&received[..header_end]);
+                let length: usize = headers.lines().find_map(|line| line.split_once(':').filter(|(key, _)| key.eq_ignore_ascii_case("content-length")).map(|(_, value)| value.trim().parse().unwrap())).unwrap();
+                while received.len() < header_end + length {
+                    let n = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(n, 0);
+                    received.extend_from_slice(&buffer[..n]);
+                }
+                let body: serde_json::Value = serde_json::from_slice(&received[header_end..header_end + length]).unwrap();
+                let reply = json!({"choices":[{"message":{"role":"assistant","content":"fixture response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3}}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+                body
+            });
+            let mut config = budget_test_config();
+            config.base_url = format!("http://{addr}/v1");
+            config.max_tokens = requested;
+            config.context_window_tokens = Some(window);
+            config.output_budget_mode = Some(mode.into());
+            let (request, budget) = super::desktop_request_budget(&config, 0, 0, None, None).unwrap();
+            let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+            let response = super::model_turn(&client, &request, false, &json!([{"role":"user","content":"hello"}]), "", &[], None, "budget-model-fixture", 0, None, Some(budget.output_reserve as i64)).await.unwrap_or_else(|error| panic!("{}", error.message));
+            assert_eq!(response.turn.text, "fixture response");
+            let sent = tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap();
+            assert_eq!(sent["max_tokens"], expected);
+            assert_eq!(sent["max_tokens"], budget.output_reserve);
+            assert_eq!(sent["stream"], false);
+        }
+    }
 
     #[test]
     fn document_tasks_reject_commands_and_outside_writes() {
@@ -5043,8 +5518,8 @@ mod tests {
     #[test]
     fn screenshots_ride_after_openai_tool_messages() {
         let results = vec![
-            ("c1".to_string(), ToolOutput { text: "截图 10×10".into(), image: Some("PNG".into()) }),
-            ("c2".to_string(), ToolOutput { text: "ok".into(), image: None }),
+            ("c1".to_string(), ToolOutput { text: "截图 10×10".into(), image: Some("PNG".into()), exit_code: None }),
+            ("c2".to_string(), ToolOutput::from("ok".to_owned())),
         ];
         let msgs = tool_result_messages(false, results);
         assert_eq!(msgs.len(), 3);
@@ -5052,7 +5527,7 @@ mod tests {
         assert_eq!(msgs[1]["tool_call_id"], "c2");
         assert_eq!(msgs[2]["role"], "user");
         assert_eq!(msgs[2]["content"][1]["image_url"]["url"], "data:image/png;base64,PNG");
-        let results = vec![("c1".to_string(), ToolOutput { text: "s".into(), image: Some("PNG".into()) })];
+        let results = vec![("c1".to_string(), ToolOutput { text: "s".into(), image: Some("PNG".into()), exit_code: None })];
         let anth = tool_result_messages(true, results);
         assert_eq!(anth.len(), 1);
         assert_eq!(anth[0]["content"][0]["content"][1]["source"]["data"], "PNG");

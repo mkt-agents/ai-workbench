@@ -1,29 +1,13 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, ScriptTemplate, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, WorkTask, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher, McpServer } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, ScriptTemplate, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, WorkTask, JsonToolHistoryItem, QuickAppLauncher, McpServer } from './types';
+import { readModelCapabilityCache } from '../lib/aiProviders';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : fallback;
-}
-
-/** Parse the JSON-encoded turns column; corrupt rows degrade to empty turns. */
-function parseTurns(raw: unknown): AiHubTurn[] {
-  if (typeof raw !== 'string' || !raw.trim()) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (t): t is AiHubTurn =>
-        !!t && typeof t === 'object' &&
-        (t.role === 'user' || t.role === 'assistant') &&
-        typeof t.content === 'string'
-    );
-  } catch {
-    return [];
-  }
 }
 
 type DbTable =
@@ -364,6 +348,13 @@ export const storage = {
         authType: (r['auth_type'] as AIModelConfig['authType']) || "api",
         temperature: finiteOr(r['temperature'], 0.7),
         maxTokens: finiteOr(r['max_tokens'], 4096),
+        contextWindowTokens: typeof r['context_window_tokens'] === 'number' ? r['context_window_tokens'] : undefined,
+        outputBudgetMode: r['output_budget_mode'] === 'auto' ? 'auto' as const : 'manual' as const,
+        capabilityCache: readModelCapabilityCache(r['capability_cache'], {
+          provider: (r['provider'] as string) || 'openai',
+          baseUrl: (r['base_url'] as string) || '',
+          model: (r['model'] as string) || '',
+        }),
         isDefault: ((r['is_default'] as number) || 0) === 1,
         createdAt: (r['created_at'] as string) || "",
         updatedAt: (r['updated_at'] as string) || "",
@@ -395,6 +386,9 @@ export const storage = {
         model: item.model,
         temperature: item.temperature,
         max_tokens: item.maxTokens,
+        context_window_tokens: item.contextWindowTokens ?? null,
+        output_budget_mode: item.outputBudgetMode === 'auto' ? 'auto' : 'manual',
+        capability_cache: JSON.stringify(readModelCapabilityCache(item.capabilityCache, item)) ?? null,
         is_default: item.isDefault ? 1 : 0,
         last_test_ok: item.lastTest ? (item.lastTest.ok ? 1 : 0) : null,
         last_test_at: item.lastTest?.at ?? null,
@@ -508,32 +502,6 @@ export const storage = {
           created_at: item.createdAt,
           updated_at: item.updatedAt,
           done_at: item.doneAt ?? null,
-        }))
-      );
-    },
-  },
-  aiHubSessions: {
-    load: async (): Promise<AiHubSession[]> => {
-      const rows = await loadRows('ai_hub_sessions');
-      return rows.map((r) => ({
-        id: r['id'] as string,
-        title: (r['title'] as string) || '',
-        task: (r['task'] as string) || 'none',
-        turns: parseTurns(r['turns']),
-        createdAt: r['created_at'] as string,
-        updatedAt: r['updated_at'] as string,
-      }));
-    },
-    save: async (items: AiHubSession[]): Promise<void> => {
-      await saveRows(
-        'ai_hub_sessions',
-        items.map((item) => ({
-          id: item.id,
-          title: item.title,
-          task: item.task || 'none',
-          turns: JSON.stringify(item.turns ?? []),
-          created_at: item.createdAt,
-          updated_at: item.updatedAt,
         }))
       );
     },

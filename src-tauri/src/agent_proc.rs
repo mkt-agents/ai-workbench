@@ -129,7 +129,17 @@ fn kill_tree(child: &mut Child) {
 }
 
 /// Run one command to completion in `cwd`. Output starts with `exit N` when it failed.
+pub(crate) struct CommandResult {
+    pub text: String,
+    pub exit_code: i32,
+}
+
+#[cfg(test)]
 pub(crate) fn run_command(cwd: &Path, args: &Value, request_id: &str) -> Result<String, String> {
+    run_command_result(cwd, args, request_id).map(|output| output.text)
+}
+
+pub(crate) fn run_command_result(cwd: &Path, args: &Value, request_id: &str) -> Result<CommandResult, String> {
     let command = arg_str(args, "command");
     if command.is_empty() {
         return Err("命令为空".into());
@@ -201,7 +211,7 @@ pub(crate) fn run_command(cwd: &Path, args: &Value, request_id: &str) -> Result<
         // 失败要说出来：只看报错文本，弱模型分不清是警告还是命令没成功。放开头，截断截不掉
         text = format!("exit {code}\n{text}");
     }
-    Ok(clip_head_tail(&text, CMD_CAP))
+    Ok(CommandResult { text: clip_head_tail(&text, CMD_CAP), exit_code: code })
 }
 
 struct BgProc {

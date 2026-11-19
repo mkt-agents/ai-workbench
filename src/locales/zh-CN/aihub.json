@@ -109,6 +109,7 @@
   "restartFromShort": "从这里重新开始",
   "threadMeta": "第 {{n}} 轮 · 会带上最近 {{max}} 轮",
   "threadMetaCompressed": "第 {{n}} 轮 · 较早内容已压缩，会带上摘要和最近 {{max}} 轮",
+  "threadRound": "第 {{n}} 轮",
   "digestLabel": "较早的对话已压缩",
   "phase": {
     "context": "正在读取 {{repo}} 的改动…",
@@ -144,6 +145,52 @@
     "tool": "工具箱",
     "app": "快捷应用",
     "installed": "已安装应用"
+  },
+  "task": {
+    "title": "任务检查点",
+    "resume": "继续任务",
+    "resumeMessage": "继续任务",
+    "details": "任务详情",
+    "goal": "任务目标",
+    "workspace": "工作区",
+    "branch": "分支",
+    "verificationLabel": "验证状态",
+    "noVerificationCommand": "未运行验证命令",
+    "reviewBadge": "待核对",
+    "checkCommand": "验证命令",
+    "exitCode": "退出码 {{code}}",
+    "needsReview": "续跑时将先只读核对工作区和结果不明的动作，确认后才能执行新动作。",
+    "state": {
+      "running": "运行中",
+      "waiting_approval": "等待审批",
+      "ended": "已结束",
+      "interrupted": "已中断"
+    },
+    "verification": {
+      "unverified": "尚未验证",
+      "passed": "验证通过",
+      "failed": "验证失败",
+      "stale": "验证已过期"
+    },
+    "reason": {
+      "app_interrupted": "应用在任务结束前退出",
+      "review_required": "需要核对工作区或动作结果",
+      "cancelled": "已取消",
+      "failed": "回合执行失败",
+      "storage_error": "检查点保存失败",
+      "model_error": "模型回合失败",
+      "tools_unavailable": "模型工具调用已降级",
+      "action_limit": "达到动作轮次上限",
+      "round_limit": "达到模型轮次上限",
+      "emergency_stop": "紧急停止"
+    },
+    "action": {
+      "pending": "执行中",
+      "done": "已执行",
+      "failed": "执行失败",
+      "uncertain": "结果待核对",
+      "reviewed": "已核对"
+    }
   },
   "agent": {
     "steps": "{{n}} 个操作",
@@ -700,5 +747,48 @@
   "petWecomErrMid1": "企微翻车，看看天玑日志。",
   "petWecomErrMid2": "企微回合失败。",
   "petWecomErrHi1": "企微报错了，我有点懵…",
-  "petWecomErrHi2": "糟，企微没答成。"
+  "petWecomErrHi2": "糟，企微没答成。",
+  "context": {
+    "command": "/compact",
+    "commandHint": "压缩早期上下文，可附加保留重点",
+    "compacted": "已压缩早期上下文",
+    "nothing": "目前没有可压缩的早期问答",
+    "compressed": "已压缩",
+    "usage": "上下文使用率",
+    "windowPercent": "所有输入占当前有效窗口的比例；颜色表示自动压缩压力",
+    "historical": "历史预算数据 · 总窗口使用率将在下一次请求时更新",
+    "recalculate": "压缩已完成 · 用量将在下一次请求时重新计算",
+    "tokenCount": "{{n}} token",
+    "estimate": "约 {{n}} token",
+    "model": "当前模型",
+    "modelWindow": "模型窗口",
+    "effectiveWindow": "有效窗口",
+    "userCap": "设置上限 {{n}}",
+    "currentInput": "本次输入（含工具定义）",
+    "toolDefinitions": "其中工具定义",
+    "outputReserve": "单次输出预留",
+    "modelOutput": "模型最大输出",
+    "contentBudget": "可用内容预算",
+    "compactTrigger": "自动压缩触发点（总输入）",
+    "budgetExplanation": "内容预算用于系统提示、消息和附件。工具定义与输出预留另占窗口；内容预算达到 80% 时自动压缩，目标降至约 65%。",
+    "unknown": "未识别",
+    "adjusted": "本次预算已调整",
+    "sources": { "manual": "手动设置", "provider": "接口声明", "catalog": "内置型号资料", "fallback": "未识别 · 48k 兜底", "unknown": "能力未知" },
+    "outputModes": { "auto": "自动", "manual": "手动" },
+    "limits": {
+      "model_output_limit": "输出预留已按模型声明的最大输出调整。",
+      "small_window": "当前窗口较小，自动输出预留已相应缩减。",
+      "thinking_adjusted": "输出预留已包含当前思考预算。",
+      "thinking_disabled": "当前容量不足以容纳思考预算，本次关闭了可选思考。",
+      "overflow_retry": "服务端返回超窗，本次重试已临时缩小输入预算。"
+    },
+    "tokens": "估算输入 {{used}} / {{budget}} token",
+    "covered": "摘要覆盖最早 {{n}} 轮",
+    "legacy": "旧版摘要 · 之前的原文已不可用",
+    "loadingOlder": "正在加载更早的消息…",
+    "loadOlder": "加载更早的消息",
+    "historyChanged": "会话记录已变更。请重新打开此会话后再试。",
+    "failed": "本次请求使用了本地裁剪，原文仍可查看。",
+    "tooLarge": "当前问题、附件或必要上下文超过模型窗口，请缩小输入范围。"
+  }
 }

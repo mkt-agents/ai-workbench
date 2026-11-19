@@ -13,12 +13,14 @@ import { MODEL_TEST_CONCURRENCY, mapPool } from "../core/asyncPool";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
 import { computeFloatingMenuStyle, type FloatingMenuStyle } from "../lib/floatingMenu";
-import type { AIModelConfig, AiScene, AuthType } from "../core/types";
+import type { AIModelConfig, AiScene, AuthType, ModelBudget } from "../core/types";
 import {
   AI_PROVIDERS,
   getDefaultUrl,
   getProviderMeta,
   providerSupportsModelList,
+  readModelCapabilityCache,
+  capabilityCacheFromModel,
   type ModelPreset,
 } from "../lib/aiProviders";
 import { AI_SCENES, AI_SCENE_I18N_KEY } from "../lib/aiSceneModels";
@@ -33,6 +35,10 @@ const SCENE_ICONS: Record<AiScene, typeof MessageSquare> = {
   report: FileBarChart2,
   commit: GitCommitHorizontal,
 };
+
+function validContextWindow(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 4096 && value <= 2000000;
+}
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -56,20 +62,6 @@ const TEMPERATURE_PRESETS = [
   { value: 1.2, key: "tempPresetCreative" },
 ] as const;
 
-/** Every power of two from 1K to 1M — one slider stop each. */
-const MAX_TOKEN_STEPS = Array.from({ length: 11 }, (_, i) => 1024 * 2 ** i);
-
-/** Snap a model completion cap onto the slider stops (largest step ≤ maxAllowed). */
-function snapMaxTokensToStep(maxAllowed: number): number {
-  const capped = Math.max(1, Math.floor(maxAllowed));
-  let best = MAX_TOKEN_STEPS[0];
-  for (const step of MAX_TOKEN_STEPS) {
-    if (step <= capped) best = step;
-    else break;
-  }
-  return best;
-}
-
 function formatTokenCount(value: number): string {
   if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) return `${value / 1048576}M`;
   if (value >= 1024 && value % 1024 === 0) return `${value / 1024}K`;
@@ -78,6 +70,7 @@ function formatTokenCount(value: number): string {
 
 /** "4096 · 4K" for the round values, plain "5000" for anything else. */
 function tokenDisplay(value: number): string {
+  if (!Number.isFinite(value)) return "—";
   const short = formatTokenCount(value);
   return short === String(value) ? short : `${value} · ${short}`;
 }
@@ -149,50 +142,246 @@ function TemperatureField(props: { value: number; onPick: (value: number) => voi
   );
 }
 
-/**
- * Max tokens on a log scale: the useful range spans 1K→1M, so a linear slider
- * is unusable and typing exact values is noise. The handle snaps to powers of
- * two, which is what every provider documents.
- */
-function TokenField(props: { value: number; onPick: (value: number) => void }) {
-  const { value, onPick } = props;
+function BudgetModePicker(props: {
+  mode: "auto" | "manual";
+  label: string;
+  disabled: boolean;
+  onPick: (mode: "auto" | "manual") => void;
+}) {
   const { t } = useTranslation("ai");
-  const nearestStep = Math.min(
-    MAX_TOKEN_STEPS.length - 1,
-    Math.max(0, Math.round(Math.log2(Math.max(1, value) / 1024)))
+  return (
+    <div className="ai-seg ai-seg-fill" role="radiogroup" aria-label={props.label}>
+      {(["auto", "manual"] as const).map((mode) => (
+        <button key={mode} type="button" role="radio" aria-checked={props.mode === mode}
+          className={`ai-seg-btn ${props.mode === mode ? "is-active" : ""}`}
+          disabled={props.disabled} onClick={() => props.onPick(mode)}>
+          {t(`models.budgetMode.${mode}`)}
+        </button>
+      ))}
+    </div>
   );
+}
+
+/** A logarithmic track keeps small token budgets usable alongside million-token windows. */
+function BudgetTokenInput({ value, min, max, label, disabled, onPick }: {
+  value: number;
+  min: number;
+  max?: number;
+  label: string;
+  disabled: boolean;
+  onPick: (value: number) => void;
+}) {
+  const { t } = useTranslation("ai");
+  const current = Number.isFinite(value) ? Math.max(min, value) : min;
+  const [expandedMax, setExpandedMax] = useState(() => Math.max(2000000, current));
+  // Exact output values have no new cap; retain an expanded track after dragging down.
+  const ceiling = max ?? Math.max(2000000, expandedMax, current);
+  const selected = Math.min(ceiling, current);
+  const logRange = Math.log(ceiling / min);
+  const position = Math.log(selected / min) / logRange * 1000;
+  const pickValue = (next: number) => {
+    if (max === undefined) setExpandedMax(Math.max(ceiling, Number.isFinite(next) ? next : min));
+    onPick(next);
+  };
+  return (
+    <div className="ai-budget-adjust">
+      <div className="ai-budget-track">
+        <input className="ai-token-slider" type="range" min={0} max={1000} step={1}
+          value={position} disabled={disabled} aria-label={label}
+          aria-valuetext={t("models.budgetSliderValue", { value: selected.toLocaleString() })}
+          style={{ "--ai-slider-progress": `${position / 10}%` } as CSSProperties}
+          onChange={(e) => {
+            const point = e.target.valueAsNumber;
+            const raw = min * Math.exp(point / 1000 * logRange);
+            const increment = raw >= 4096 ? 1024 : raw >= 1024 ? 256 : 1;
+            const next = Math.round(raw / increment) * increment;
+            pickValue(point === 0 ? min : point === 1000 ? ceiling : Math.min(ceiling, Math.max(min, next)));
+          }}
+          onKeyDown={(e) => {
+            // Native range keys operate on the track position; use token increments instead.
+            const direction = ({ ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1,
+              PageDown: -10, PageUp: 10 } as Record<string, number>)[e.key];
+            if (direction === undefined && e.key !== "Home" && e.key !== "End") return;
+            e.preventDefault();
+            const increment = Math.max(1, 2 ** (Math.floor(Math.log2(selected)) - 5));
+            pickValue(e.key === "Home" ? min : e.key === "End" ? ceiling
+              : Math.min(ceiling, Math.max(min, Math.round(selected + direction * increment))));
+          }} />
+        <div className="ai-token-scale" aria-hidden="true">
+          <span>{formatTokenCount(min)}</span><span>{ceiling.toLocaleString()}</span>
+        </div>
+      </div>
+      <input className="input-field ai-budget-number" type="number" min={min} max={max} step={1}
+        value={Number.isFinite(value) ? value : ""} disabled={disabled} aria-label={label}
+        onChange={(e) => pickValue(e.target.valueAsNumber)} />
+    </div>
+  );
+}
+
+/** Manual output is an exact request cap, independent of the model's capability. */
+function TokenField(props: {
+  value: number;
+  mode: "auto" | "manual";
+  disabled: boolean;
+  onPick: (value: number) => void;
+  onMode: (mode: "auto" | "manual") => void;
+}) {
+  const { value, onPick, mode, disabled, onMode } = props;
+  const { t } = useTranslation("ai");
   return (
     <FieldShell
       label={t("models.maxTokens")}
-      display={tokenDisplay(value)}
-      hint={t("models.maxTokensHint")}
+      display={mode === "auto" ? t("models.budgetMode.auto") : tokenDisplay(value)}
+      hint={t(mode === "auto" ? "models.outputAutoHint" : "models.maxTokensHint")}
       apiName={t("models.maxTokensApi")}
     >
-      <input
-        className="ai-token-slider"
-        type="range"
-        min={0}
-        max={MAX_TOKEN_STEPS.length - 1}
-        step={1}
-        value={nearestStep}
-        style={
-          {
-            "--ai-slider-progress": `${(nearestStep / (MAX_TOKEN_STEPS.length - 1)) * 100}%`,
-          } as CSSProperties
-        }
-        aria-label={t("models.maxTokens")}
-        onChange={(e) => onPick(MAX_TOKEN_STEPS[finiteOr(parseInt(e.target.value, 10), nearestStep)])}
-      />
-      <div className="ai-token-scale">
-        {[
-          MAX_TOKEN_STEPS[0],
-          MAX_TOKEN_STEPS[(MAX_TOKEN_STEPS.length - 1) / 2],
-          MAX_TOKEN_STEPS[MAX_TOKEN_STEPS.length - 1],
-        ].map((step) => (
-          <span key={step}>{formatTokenCount(step)}</span>
-        ))}
-      </div>
+      <BudgetModePicker mode={mode} label={t("models.maxTokens")} disabled={disabled} onPick={onMode} />
+      {mode === "manual" && (
+        <>
+          <BudgetTokenInput value={value} min={1} label={t("models.maxTokens")}
+            disabled={disabled} onPick={onPick} />
+          <button type="button" className="ai-budget-restore" disabled={disabled} onClick={() => onMode("auto")}>
+            {t("models.restoreAuto")}
+          </button>
+        </>
+      )}
     </FieldShell>
+  );
+}
+
+/** The same portable configuration is used by export, share and duplicate. */
+function portableModelConfig(config: AIModelConfig): Omit<AIModelConfig, "id" | "createdAt" | "updatedAt" | "isDefault" | "lastTest"> {
+  return {
+    name: config.name,
+    provider: config.provider,
+    apiKey: config.apiKey,
+    authType: config.authType,
+    baseUrl: config.baseUrl,
+    model: config.model,
+    temperature: config.temperature,
+    maxTokens: config.maxTokens,
+    contextWindowTokens: config.contextWindowTokens,
+    outputBudgetMode: config.outputBudgetMode ?? "manual",
+    capabilityCache: readModelCapabilityCache(config.capabilityCache, config),
+    vision: Boolean(config.vision),
+    visionMode: config.visionMode || (config.vision ? "vision" : "auto"),
+  };
+}
+
+function budgetErrorCopy(error: string, t: TFunction<"ai">) {
+  if (/\bCONTEXT_OUTPUT_TOO_LARGE\b/.test(error)) {
+    const match = error.match(/output reserve \((\d+)\) plus tool schemas \((\d+)\).*?effective context window \((\d+)\)/);
+    const values = match?.slice(1).map(Number);
+    const description = values?.every(Number.isSafeInteger)
+      ? t(values[1] > 0 ? "models.budgetErrors.outputWithTools" : "models.budgetErrors.outputSummary", {
+        output: values[0].toLocaleString(), tools: values[1].toLocaleString(), window: values[2].toLocaleString(),
+      })
+      : t("models.budgetErrors.outputFallback");
+    return { title: t("models.budgetErrors.outputTitle"), description,
+      hint: t("models.budgetErrors.outputHint"), outputTooLarge: true };
+  }
+  const validation = [t("models.contextWindowHint"), t("models.validation.maxTokensInvalid"), t("models.validation.modelRequired")];
+  const knownValidation = validation.includes(error);
+  return {
+    title: t(knownValidation ? "models.budgetErrors.settingsTitle" : "models.budgetErrors.unavailableTitle"),
+    description: knownValidation ? error : t("models.budgetErrors.unavailableHint"),
+    hint: undefined,
+    outputTooLarge: false,
+  };
+}
+
+function ModelBudgetPreview(props: {
+  budget?: ModelBudget;
+  error?: string;
+  disabled: boolean;
+  onUseAutomaticOutput?: () => void;
+}) {
+  const { t } = useTranslation("ai");
+  const { budget, error, disabled, onUseAutomaticOutput } = props;
+  const errorCopy = error ? budgetErrorCopy(error, t) : undefined;
+  return (
+    <div className="ai-budget-preview" aria-live="polite" aria-busy={!budget && !error}>
+      <div className="ai-budget-preview-title">{t("models.budgetPreview")}</div>
+      {error && errorCopy ? <div className="ai-budget-error" role="alert">
+        <div className="ai-budget-error-heading"><AlertCircle size={15} aria-hidden="true" /><strong>{errorCopy.title}</strong></div>
+        <p>{errorCopy.description}</p>
+        {errorCopy.hint && <p className="ai-budget-error-hint">{errorCopy.hint}</p>}
+        {errorCopy.outputTooLarge && onUseAutomaticOutput && <button type="button" className="btn btn-secondary btn-sm ai-budget-error-action"
+          disabled={disabled} onClick={onUseAutomaticOutput}>{t("models.budgetErrors.useAuto")}</button>}
+        <details className="ai-budget-error-details" key={error}>
+          <summary>{t("models.budgetErrors.details")}</summary>
+          <pre>{error}</pre>
+        </details>
+      </div> : budget ? (
+        <>
+          <dl className="ai-budget-values">
+            <div><dt>{t("models.budgetModelWindow")}</dt><dd>{tokenDisplay(budget.modelWindow)}
+              <span className="ai-budget-source" title={budget.windowReference}>{t(`models.budgetSources.${budget.windowSource}`)}</span>
+            </dd></div>
+            <div><dt>{t("models.budgetModelOutput")}</dt><dd>{budget.modelMaxOutputTokens === undefined ? t("models.budgetUnknown") : tokenDisplay(budget.modelMaxOutputTokens)}
+              <span className="ai-budget-source" title={budget.outputReference}>{t(`models.budgetSources.${budget.outputSource}`)}</span>
+            </dd></div>
+            {budget.configuredLimit !== undefined && <div><dt>{t("models.budgetConfiguredCap")}</dt><dd>{tokenDisplay(budget.configuredLimit)}</dd></div>}
+            <div><dt>{t("models.budgetEffectiveWindow")}</dt><dd>{tokenDisplay(budget.effectiveWindow)}</dd></div>
+            <div><dt>{t("models.budgetRequestedOutput")}</dt><dd>{tokenDisplay(budget.requestedOutputTokens)}</dd></div>
+            <div><dt>{t("models.budgetOutputReserve")}</dt><dd>{tokenDisplay(budget.outputReserve)}</dd></div>
+            <div><dt>{t("models.budgetInput")}</dt><dd>{tokenDisplay(budget.inputBudget)}</dd></div>
+            {budget.thinkingBudget !== undefined && <div><dt>{t("models.budgetThinking")}</dt><dd>{tokenDisplay(budget.thinkingBudget)}</dd></div>}
+          </dl>
+          {budget.limitations.length > 0 && <ul className="ai-budget-reasons">
+            {budget.limitations.map((reason) => <li key={reason}>{t(`models.budgetLimitations.${reason}`, { defaultValue: reason })}</li>)}
+          </ul>}
+          <p className="ai-budget-note">{t("models.budgetPreviewHint")}</p>
+        </>
+      ) : <p className="ai-budget-note"><Loader2 size={12} className="spin" />{t("models.budgetPreviewLoading")}</p>}
+    </div>
+  );
+}
+
+type ModelBudgetFields = Pick<AIModelConfig, "maxTokens" | "outputBudgetMode" | "contextWindowTokens">;
+
+export interface ModelBudgetSettingsProps {
+  config: ModelBudgetFields;
+  budget?: ModelBudget;
+  error?: string;
+  disabled?: boolean;
+  onChange: (patch: Partial<ModelBudgetFields>) => void;
+}
+
+/** Pure settings view, also renderable in the parent's locale/viewport regression fixture. */
+export function ModelBudgetSettings({ config, budget, error, disabled = false, onChange }: ModelBudgetSettingsProps) {
+  const { t } = useTranslation("ai");
+  const contextMode = config.contextWindowTokens === undefined ? "auto" : "manual";
+  const setContextMode = (mode: "auto" | "manual") => onChange({
+    contextWindowTokens: mode === "auto" ? undefined : config.contextWindowTokens ?? budget?.modelWindow ?? 48000,
+  });
+  return (
+    <section className="ai-budget-settings ai-form-span" aria-label={t("models.budgetTitle")}>
+      <div className="ai-budget-controls">
+        <FieldShell label={t("models.contextWindow")}
+          display={contextMode === "auto" ? t("models.budgetMode.auto") : tokenDisplay(config.contextWindowTokens!)}
+          hint={t(contextMode === "auto" ? "models.contextAutoHint" : "models.contextWindowHint")}>
+          <BudgetModePicker mode={contextMode} label={t("models.contextWindow")} disabled={disabled} onPick={setContextMode} />
+          {contextMode === "manual" && <>
+            <BudgetTokenInput value={config.contextWindowTokens!} min={4096} max={2000000}
+              label={t("models.contextWindow")} disabled={disabled}
+              onPick={(contextWindowTokens) => onChange({ contextWindowTokens })} />
+            <button type="button" className="ai-budget-restore" disabled={disabled} onClick={() => setContextMode("auto")}>
+              {t("models.restoreAuto")}
+            </button>
+          </>}
+        </FieldShell>
+        <TokenField value={config.maxTokens} mode={config.outputBudgetMode ?? "manual"} disabled={disabled}
+          onPick={(maxTokens) => onChange({ maxTokens })}
+          onMode={(outputBudgetMode) => onChange({
+            outputBudgetMode,
+            maxTokens: Number.isSafeInteger(config.maxTokens) && config.maxTokens > 0 ? config.maxTokens : 4096,
+          })} />
+      </div>
+      <ModelBudgetPreview budget={budget} error={error} disabled={disabled}
+        onUseAutomaticOutput={(config.outputBudgetMode ?? "manual") === "manual"
+          ? () => onChange({ outputBudgetMode: "auto" }) : undefined} />
+    </section>
   );
 }
 
@@ -207,6 +396,7 @@ const emptyForm = (): Omit<AIModelConfig, "id" | "createdAt" | "updatedAt"> => (
   model: defaultProvider.defaultModel,
   temperature: 0.7,
   maxTokens: 4096,
+  outputBudgetMode: "auto",
   isDefault: false,
   vision: false,
   visionMode: "auto",
@@ -346,7 +536,8 @@ function AIAssistant() {
   const invokeTestModelConnection = useGlobalStore((s) => s.invokeTestModelConnection);
   const invokeListProviderModels = useGlobalStore((s) => s.invokeListProviderModels);
   const invokeInferModelModality = useGlobalStore((s) => s.invokeInferModelModality);
-  const invokeInferModelMaxOutput = useGlobalStore((s) => s.invokeInferModelMaxOutput);
+  const invokeResolveModelBudget = useGlobalStore((s) => s.invokeResolveModelBudget);
+  const configuredContextTokens = useGlobalStore((s) => s.settings.agentContextTokens) ?? 0;
   const invokeDetectLocalAiEndpoints = useGlobalStore((s) => s.invokeDetectLocalAiEndpoints);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeSaveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
@@ -376,6 +567,7 @@ function AIAssistant() {
   const [formData, setFormData] = useState(emptyForm);
   const [fetchedModels, setFetchedModels] = useState<ModelPreset[] | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [savingModel, setSavingModel] = useState(false);
   const [testStatus, setTestStatus] = useState<{
     testing: boolean;
     result: { success: boolean; message: string } | null;
@@ -384,13 +576,8 @@ function AIAssistant() {
   const [modalStatus, setModalStatus] = useState<ModalStatus | null>(null);
   /** User edited the name; stop auto-suggesting on create. */
   const [nameTouched, setNameTouched] = useState(false);
-  /** User dragged maxTokens; stop auto-filling from model caps. */
-  const maxTokensTouchedRef = useRef(false);
-  const markMaxTokensTouched = () => {
-    maxTokensTouchedRef.current = true;
-  };
-  /** Model id when the edit modal opened — auto maxTokens only after it changes. */
-  const modelAtEditOpenRef = useRef("");
+  /** Invalidated synchronously when credentials change or another draft opens. */
+  const modelListRequestRef = useRef(0);
   /** After a successful list fetch, open the picker once the trigger mounts. */
   const [openPickerAfterRefresh, setOpenPickerAfterRefresh] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -429,6 +616,36 @@ function AIAssistant() {
   const pickerMenuRef = useRef<HTMLDivElement | null>(null);
   const pickerSearchRef = useRef<HTMLInputElement | null>(null);
 
+  const previewConfig = useMemo<AIModelConfig>(() => ({
+    ...formData, id: editingId ?? "", createdAt: "", updatedAt: "", apiKey: "",
+  }), [formData, editingId]);
+  const [budgetPreview, setBudgetPreview] = useState<{
+    config: AIModelConfig; contextTokens: number; budget?: ModelBudget; error?: string;
+  } | null>(null);
+  const currentPreview = budgetPreview?.config === previewConfig && budgetPreview.contextTokens === configuredContextTokens ? budgetPreview : null;
+  useEffect(() => {
+    if (!showModal) return;
+    let cancelled = false;
+    const invalid = previewConfig.contextWindowTokens !== undefined && !validContextWindow(previewConfig.contextWindowTokens)
+      ? t("models.contextWindowHint")
+      : !Number.isSafeInteger(previewConfig.maxTokens) || previewConfig.maxTokens < 1
+        ? t("models.validation.maxTokensInvalid")
+        : !previewConfig.model.trim() ? t("models.validation.modelRequired") : undefined;
+    if (invalid) {
+      setBudgetPreview({ config: previewConfig, contextTokens: configuredContextTokens, error: invalid });
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void invokeResolveModelBudget({ config: previewConfig, contextTokens: configuredContextTokens }).then(
+        (budget) => { if (!cancelled) setBudgetPreview({ config: previewConfig, contextTokens: configuredContextTokens, budget }); },
+        (error: unknown) => { if (!cancelled) setBudgetPreview({ config: previewConfig, contextTokens: configuredContextTokens, error: String(error) }); },
+      );
+    }, 180);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [showModal, previewConfig, configuredContextTokens, invokeResolveModelBudget, t]);
+
+  useEffect(() => () => { modelListRequestRef.current += 1; }, []);
+
   const showMsg = (type: "success" | "error", text: string) => {
     setMessage({ type, text });
     setTimeout(() => setMessage(null), 4000);
@@ -442,6 +659,8 @@ function AIAssistant() {
 
   /** Drop stale list / test / status after credentials or endpoint change. */
   const invalidateCredentialDerived = () => {
+    modelListRequestRef.current += 1;
+    setFetchingModels(false);
     setFetchedModels(null);
     closeModelPicker();
     setOpenPickerAfterRefresh(false);
@@ -481,53 +700,20 @@ function AIAssistant() {
       });
   };
 
-  /**
-   * 按模型 completion 上限预填最长输出（snap 到滑块步进）。
-   * 用户手动调过、或编辑态未改模型 id 时不覆盖。
-   */
-  const applySuggestedMaxTokens = (
-    provider: string,
-    model: string,
-    knownMax?: number | null
-  ) => {
-    const value = model.trim();
-    if (!value || maxTokensTouchedRef.current) return;
-    if (editingId && value === modelAtEditOpenRef.current) return;
-    const apply = (raw: number) => {
-      const snapped = snapMaxTokensToStep(raw);
-      setFormData((cur) => {
-        if (maxTokensTouchedRef.current) return cur;
-        if (cur.model.trim() !== value || cur.provider !== provider) return cur;
-        if (cur.maxTokens === snapped) return cur;
-        return { ...cur, maxTokens: snapped };
-      });
-    };
-    if (typeof knownMax === "number" && knownMax > 0) {
-      apply(knownMax);
-      return;
-    }
-    void invokeInferModelMaxOutput({ provider, model: value })
-      .then((n) => {
-        if (typeof n === "number" && n > 0) apply(n);
-      })
-      .catch(() => {
-        /* 无规则则保持现状 */
-      });
-  };
-
-  const commitModel = (id: string, modality?: string, maxOutputTokens?: number) => {
+  const commitModel = (id: string, modality?: string) => {
     const value = id.trim();
     if (!value) return;
     invalidateTestResult();
     setFormData((cur) => {
       const next = { ...cur, model: value };
+      next.capabilityCache = capabilityCacheFromModel(next, fetchedModels?.find((m) => m.id === value))
+        ?? readModelCapabilityCache(cur.capabilityCache, next);
       if (!editingId && !nameTouched) {
         next.name = suggestConfigName(cur.provider, value);
       }
       return next;
     });
     applyAutoVision(formData.provider, value, modality);
-    applySuggestedMaxTokens(formData.provider, value, maxOutputTokens);
     closeModelPicker();
   };
 
@@ -541,13 +727,9 @@ function AIAssistant() {
     }
   };
 
-  /** 分享文本：接口地址 / 密钥 / 模型各占一行，第三方拿到即可直连。 */
+  /** Share the same importable configuration as the file export. */
   const buildShareText = (config: AIModelConfig) =>
-    [
-      `${t("models.baseUrl")}: ${config.baseUrl}`,
-      `${t("models.apiKey")}: ${config.apiKey}`,
-      `${t("models.model")}: ${config.model}`,
-    ].join("\n");
+    JSON.stringify({ app: "ai-workbench", kind: "ai-models", version: 1, models: [portableModelConfig(config)] }, null, 2);
 
   const openShare = (config: AIModelConfig) => {
     setShareShowKey(false);
@@ -759,7 +941,7 @@ function AIAssistant() {
   const canSubmit =
     Boolean(formData.name.trim() && formData.baseUrl.trim() && formData.model.trim()) &&
     (!keyRequired || Boolean(formData.apiKey.trim()));
-  const modalBusy = fetchingModels || testStatus.testing;
+  const modalBusy = fetchingModels || testStatus.testing || savingModel;
 
   const missingSubmitFields = useMemo(() => {
     const items: string[] = [];
@@ -787,6 +969,7 @@ function AIAssistant() {
   }, [openPickerAfterRefresh, showModelSelect]);
 
   const resetModalState = () => {
+    modelListRequestRef.current += 1;
     const form = emptyForm();
     form.name = suggestConfigName(form.provider, form.model);
     setFormData(form);
@@ -798,8 +981,6 @@ function AIAssistant() {
     setTestStatus({ testing: false, result: null });
     setModalStatus(null);
     setNameTouched(false);
-    maxTokensTouchedRef.current = false;
-    modelAtEditOpenRef.current = "";
     setOpenPickerAfterRefresh(false);
   };
 
@@ -812,8 +993,6 @@ function AIAssistant() {
   const openCreateModal = () => {
     resetModalState();
     setShowModal(true);
-    const form = emptyForm();
-    applySuggestedMaxTokens(form.provider, form.model);
   };
 
   const handleProviderChange = (provider: string) => {
@@ -838,6 +1017,7 @@ function AIAssistant() {
         authType,
         baseUrl,
         model: newModel,
+        capabilityCache: readModelCapabilityCache(cur.capabilityCache, { provider, baseUrl, model: newModel }),
         name:
           isCreate && !nameTouched ? suggestConfigName(provider, newModel) : cur.name,
       };
@@ -849,29 +1029,30 @@ function AIAssistant() {
     const nextModel =
       !editingId || modelMatchesPrevDefault ? next?.defaultModel ?? "" : formData.model;
     applyAutoVision(provider, nextModel);
-    applySuggestedMaxTokens(provider, nextModel);
   };
 
   const handleAuthTypeChange = (authType: AuthType) => {
     const prevUrl = getDefaultUrl("mimo", formData.authType);
     const urlMatches = !formData.baseUrl || formData.baseUrl === prevUrl;
     invalidateCredentialDerived();
-    setFormData((cur) => ({
-      ...cur,
-      authType,
-      baseUrl: urlMatches ? getDefaultUrl("mimo", authType) : cur.baseUrl,
-    }));
+    setFormData((cur) => {
+      const baseUrl = urlMatches ? getDefaultUrl("mimo", authType) : cur.baseUrl;
+      return { ...cur, authType, baseUrl, capabilityCache: readModelCapabilityCache(cur.capabilityCache, { ...cur, baseUrl }) };
+    });
   };
 
   const handleCustomModelChange = (model: string) => {
     invalidateTestResult();
-    setFormData((cur) => ({
-      ...cur,
-      model,
-      name: !editingId && !nameTouched ? suggestConfigName(cur.provider, model) : cur.name,
-    }));
+    setFormData((cur) => {
+      const next = { ...cur, model };
+      return {
+        ...next,
+        capabilityCache: capabilityCacheFromModel(next, fetchedModels?.find((m) => m.id === model.trim()))
+          ?? readModelCapabilityCache(cur.capabilityCache, next),
+        name: !editingId && !nameTouched ? suggestConfigName(cur.provider, model) : cur.name,
+      };
+    });
     applyAutoVision(formData.provider, model);
-    applySuggestedMaxTokens(formData.provider, model);
   };
 
   const handleRefreshModels = async () => {
@@ -890,14 +1071,13 @@ function AIAssistant() {
       setModalStatus({ type: "error", text: t("models.validation.urlInvalid") });
       return;
     }
+    const requestId = ++modelListRequestRef.current;
+    const requested = { provider: formData.provider, apiKey: formData.apiKey.trim(), baseUrl: formData.baseUrl.trim().replace(/\/+$/, "") };
     setFetchingModels(true);
     setModalStatus({ type: "info", text: t("models.refreshingList") });
     try {
-      const result = await invokeListProviderModels({
-        provider: formData.provider,
-        apiKey: formData.apiKey.trim(),
-        baseUrl: formData.baseUrl.trim().replace(/\/+$/, ""),
-      });
+      const result = await invokeListProviderModels(requested);
+      if (requestId !== modelListRequestRef.current) return;
       if (!result.success) {
         setModalStatus({
           type: "error",
@@ -910,24 +1090,33 @@ function AIAssistant() {
         label: m.label || m.id,
         modality: m.modality,
         maxOutputTokens: m.maxOutputTokens,
+        contextWindowTokens: m.contextWindowTokens,
       }));
       setFetchedModels(fetched);
+      setFormData((cur) => {
+        if (requestId !== modelListRequestRef.current || cur.provider !== requested.provider || cur.baseUrl.trim().replace(/\/+$/, "") !== requested.baseUrl || cur.apiKey.trim() !== requested.apiKey) return cur;
+        // Refresh only explicit metadata for the currently selected model; retain manual edits.
+        return { ...cur, capabilityCache: capabilityCacheFromModel(cur, fetched.find((m) => m.id === cur.model.trim())) };
+      });
       setModalStatus({
         type: "success",
         text: t("models.refreshSuccess", { count: fetched.length }),
       });
       if (fetched.length > 0) setOpenPickerAfterRefresh(true);
     } catch (error) {
+      if (requestId !== modelListRequestRef.current) return;
       setModalStatus({
         type: "error",
         text: t("models.refreshFailed", { error: String(error) }),
       });
     } finally {
-      setFetchingModels(false);
+      if (requestId === modelListRequestRef.current) setFetchingModels(false);
     }
   };
 
   const handleEdit = (config: AIModelConfig) => {
+    modelListRequestRef.current += 1;
+    setFetchingModels(false);
     setEditingId(config.id);
     setFormData({
       name: config.name,
@@ -938,6 +1127,9 @@ function AIAssistant() {
       model: config.model,
       temperature: config.temperature,
       maxTokens: config.maxTokens,
+      contextWindowTokens: config.contextWindowTokens,
+      outputBudgetMode: config.outputBudgetMode ?? "manual",
+      capabilityCache: readModelCapabilityCache(config.capabilityCache, config),
       isDefault: config.isDefault,
       vision: Boolean(config.vision),
       visionMode: config.visionMode || (config.vision ? "vision" : "auto"),
@@ -948,8 +1140,6 @@ function AIAssistant() {
     setTestStatus({ testing: false, result: null });
     setModalStatus(null);
     setNameTouched(true);
-    maxTokensTouchedRef.current = false;
-    modelAtEditOpenRef.current = config.model.trim();
     setOpenPickerAfterRefresh(false);
     setShowModal(true);
   };
@@ -990,8 +1180,12 @@ function AIAssistant() {
       setModalStatus({ type: "error", text: t("models.validation.nameDuplicate") });
       return;
     }
-    if (formData.maxTokens < 1) {
+    if (!Number.isSafeInteger(formData.maxTokens) || formData.maxTokens < 1) {
       setModalStatus({ type: "error", text: t("models.validation.maxTokensInvalid") });
+      return;
+    }
+    if (formData.contextWindowTokens != null && !validContextWindow(formData.contextWindowTokens)) {
+      setModalStatus({ type: "error", text: t("models.contextWindowHint") });
       return;
     }
     if (keyRequired && !formData.apiKey.trim()) {
@@ -1017,7 +1211,21 @@ function AIAssistant() {
       apiKey: formData.apiKey.trim(),
       baseUrl: formData.baseUrl.trim().replace(/\/+$/, ""),
       model: formData.model.trim(),
+      capabilityCache: readModelCapabilityCache(formData.capabilityCache, formData),
     };
+
+    setSavingModel(true);
+    try {
+      await invokeResolveModelBudget({
+        config: { ...payload, id: editingId ?? "", createdAt: "", updatedAt: "" },
+        contextTokens: configuredContextTokens,
+      });
+    } catch (error) {
+      setSavingModel(false);
+      setBudgetPreview({ config: previewConfig, contextTokens: configuredContextTokens, error: String(error) });
+      setModalStatus({ type: "error", text: budgetErrorCopy(String(error), t).title });
+      return;
+    }
 
     // auto 模式：保存前兜底重算一次 vision（表单可能从未触发 commit，如默认值直接保存）。
     if ((payload.visionMode || "auto") === "auto") {
@@ -1048,6 +1256,8 @@ function AIAssistant() {
         type: "error",
         text: t("models.validation.saveFailed", { error: e }),
       });
+    } finally {
+      setSavingModel(false);
     }
   };
 
@@ -1055,6 +1265,7 @@ function AIAssistant() {
   useEffect(() => {
     if (!showModal) return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (!(e.ctrlKey || e.metaKey) || e.key !== "Enter") return;
       if (modalBusy || !canSubmit) return;
       e.preventDefault();
@@ -1063,7 +1274,7 @@ function AIAssistant() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showModal, modalBusy, canSubmit, formData, editingId]);
+  }, [showModal, modalBusy, canSubmit, formData, editingId, configuredContextTokens]);
 
   const runConnectionTest = async (config: AIModelConfig) => {
     return invokeTestModelConnection({
@@ -1104,18 +1315,7 @@ function AIAssistant() {
         kind: "ai-models",
         version: 1,
         exportedAt: new Date().toISOString(),
-        models: aiModels.map((config) => ({
-          name: config.name,
-          provider: config.provider,
-          apiKey: config.apiKey,
-          authType: config.authType,
-          baseUrl: config.baseUrl,
-          model: config.model,
-          temperature: config.temperature,
-          maxTokens: config.maxTokens,
-          vision: Boolean(config.vision),
-          visionMode: config.visionMode || (config.vision ? "vision" : "auto"),
-        })),
+        models: aiModels.map(portableModelConfig),
       };
       const path = await invokeSaveTextFile(
         JSON.stringify(payload, null, 2),
@@ -1172,17 +1372,19 @@ function AIAssistant() {
         }
         existing.add(fingerprint(entry));
         const provider = String(item?.provider ?? "custom");
+        const normalizedProvider = (knownProviders.has(provider) ? provider : "custom") as AIModelConfig["provider"];
         await addAIModel({
           name: entry.name,
-          provider: (knownProviders.has(provider)
-            ? provider
-            : "custom") as AIModelConfig["provider"],
+          provider: normalizedProvider,
           apiKey: String(item?.apiKey ?? ""),
-          authType: (item?.authType === "oauth" ? "oauth" : "api") as AuthType,
+          authType: item?.authType === "token_plan" ? "token_plan" : "api",
           baseUrl: entry.baseUrl,
           model: entry.model,
           temperature: finiteOr(item?.temperature, 0.7),
           maxTokens: finiteOr(item?.maxTokens, 4096),
+          contextWindowTokens: validContextWindow(item?.contextWindowTokens) ? item.contextWindowTokens : undefined,
+          outputBudgetMode: item?.outputBudgetMode === "auto" ? "auto" : "manual",
+          capabilityCache: readModelCapabilityCache(item?.capabilityCache, { provider: normalizedProvider, ...entry }),
           isDefault: false,
           vision: item?.vision === true,
           visionMode:
@@ -1268,14 +1470,8 @@ function AIAssistant() {
   const handleClone = async (config: AIModelConfig) => {
     try {
       await addAIModel({
+        ...portableModelConfig(config),
         name: `${config.name}${t("models.cloneSuffix")}`,
-        provider: config.provider,
-        apiKey: config.apiKey,
-        authType: config.authType,
-        baseUrl: config.baseUrl,
-        model: config.model,
-        temperature: config.temperature,
-        maxTokens: config.maxTokens,
         isDefault: false,
       });
       showMsg("success", t("models.cloned", { name: config.name }));
@@ -1430,6 +1626,7 @@ function AIAssistant() {
           model: modelId,
           temperature: 0.7,
           maxTokens: 4096,
+          outputBudgetMode: "auto",
           isDefault: aiModels.length === 0 && added === 0,
         });
         added += 1;
@@ -2232,7 +2429,10 @@ function AIAssistant() {
                           onChange={(e) => {
                             const baseUrl = e.target.value;
                             invalidateCredentialDerived();
-                            setFormData((cur) => ({ ...cur, baseUrl }));
+                            setFormData((cur) => ({
+                              ...cur, baseUrl,
+                              capabilityCache: readModelCapabilityCache(cur.capabilityCache, { ...cur, baseUrl }),
+                            }));
                           }}
                           placeholder="https://api.openai.com/v1"
                           disabled={modalBusy}
@@ -2327,8 +2527,7 @@ function AIAssistant() {
                                       if (exact)
                                         commitModel(
                                           exact.id,
-                                          exact.modality,
-                                          exact.maxOutputTokens
+                                          exact.modality
                                         );
                                       else if (showCustomRow) commitModel(customCandidate);
                                     }}
@@ -2353,7 +2552,7 @@ function AIAssistant() {
                                             className="ai-model-option-main"
                                             title={m.id}
                                             onClick={() =>
-                                              commitModel(m.id, m.modality, m.maxOutputTokens)
+                                              commitModel(m.id, m.modality)
                                             }
                                           >
                                             <span className="ai-model-option-id">{m.id}</span>
@@ -2435,23 +2634,18 @@ function AIAssistant() {
 
                     <div className="ai-form-section">
                       <div className="ai-form-section-label">{t("models.sectionAdvanced")}</div>
-                      <div className="ai-preset-grid">
-                        <TemperatureField
-                          value={formData.temperature}
-                          onPick={(temperature) => {
-                            invalidateTestResult();
-                            setFormData({ ...formData, temperature });
-                          }}
-                        />
-                        <TokenField
-                          value={formData.maxTokens}
-                          onPick={(maxTokens) => {
-                            markMaxTokensTouched();
-                            invalidateTestResult();
-                            setFormData({ ...formData, maxTokens });
-                          }}
-                        />
-                      </div>
+                      <TemperatureField
+                        value={formData.temperature}
+                        onPick={(temperature) => {
+                          invalidateTestResult();
+                          setFormData((cur) => ({ ...cur, temperature }));
+                        }}
+                      />
+                      <ModelBudgetSettings config={formData} budget={currentPreview?.budget} error={currentPreview?.error}
+                        disabled={modalBusy} onChange={(patch) => {
+                          invalidateTestResult();
+                          setFormData((cur) => ({ ...cur, ...patch }));
+                        }} />
                       <label className="ai-checkbox">
                         <input
                           type="checkbox"

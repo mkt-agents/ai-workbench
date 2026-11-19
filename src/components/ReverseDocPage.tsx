@@ -15,7 +15,9 @@ import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useGlobalStore } from "../core/store";
-import type { AppSettings, DshModelCatalog, GitScannedRepo } from "../core/types";
+import type { AIModelConfig, AppSettings, DshModelCatalog, GitScannedRepo } from "../core/types";
+import { resolveSceneModel } from "../lib/aiSceneModels";
+import { THINKING_LEVELS, thinkingSupported } from "../lib/modelThinking";
 import { invocations, type HarnessSkillView } from "../core/store/invocations";
 import {
   DEFAULT_DOCGEN_QUALITY_PROMPT,
@@ -323,6 +325,7 @@ export default function ReverseDocPage() {
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
   const mcpServers = useGlobalStore((s) => s.mcpServers);
+  const aiModels = useGlobalStore((s) => s.aiModels);
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -409,6 +412,31 @@ export default function ReverseDocPage() {
       ? settings.wecomDocgenEngine
       : "inherit";
   const docgenEngineResolved = docgenEngine === "inherit" ? engine : docgenEngine;
+  // 文档天玑档：模型下拉来自本地模型库（按 provider 分组），空 = 跟随场景模型。
+  const docgenTianjiModelValue = (settings.wecomDocgenTianjiModel ?? "").trim();
+  const docgenTianjiModelGroups = (() => {
+    const byProvider = new Map<string, { value: string; label: string; hint?: string }[]>();
+    for (const model of aiModels) {
+      const value = (model.id ?? "").trim();
+      if (!value) continue;
+      const key = (model.provider ?? "").trim() || "custom";
+      const list = byProvider.get(key) ?? [];
+      list.push({ value, label: model.name || model.model, hint: model.model });
+      byProvider.set(key, list);
+    }
+    return Array.from(byProvider, ([key, options]) => ({ key, label: key, options }));
+  })();
+  const docgenTianjiEffectiveModel: AIModelConfig | undefined =
+    (docgenTianjiModelValue
+      ? aiModels.find((m) => (m.id ?? "") === docgenTianjiModelValue)
+      : undefined) ??
+    resolveSceneModel("aiHub", aiModels, settings.aiSceneModels) ??
+    aiModels.find((m) => m.isDefault) ??
+    aiModels[0];
+  const docgenTianjiThinkingEnabled = thinkingSupported(
+    docgenTianjiEffectiveModel?.provider,
+    docgenTianjiEffectiveModel?.model,
+  );
   const lookbackValue = (() => {
     const n = settings.wecomDocgenLookbackDays;
     return typeof n === "number" && Number.isFinite(n)
@@ -1417,6 +1445,49 @@ export default function ReverseDocPage() {
                         : catalog
                           ? t("wecom.docgenDshModelHint")
                           : t("wecom.docgenDshModelNeedReady")}
+                    </p>
+                  }
+                />
+              ) : null}
+
+              {docgenEngineResolved === "tianji" ? (
+                <Row
+                  label={t("wecom.tianjiModelRow")}
+                  control={
+                    <>
+                      <GroupedSelect
+                        className="wecom-split"
+                        value={docgenTianjiModelValue}
+                        disabled={busy}
+                        fallbackLabel={t("wecom.tianjiModelFollow")}
+                        staleLabel={t("wecom.dshModelMissing")}
+                        searchPlaceholder={t("wecom.dshModelSearch")}
+                        emptyLabel={t("wecom.dshModelNoMatch")}
+                        groups={docgenTianjiModelGroups}
+                        onChange={(next) => void push({ wecomDocgenTianjiModel: next })}
+                      />
+                      <select
+                        className="input-field wecom-split-effort"
+                        value={settings.wecomDocgenTianjiThinking ?? ""}
+                        disabled={busy || !docgenTianjiThinkingEnabled}
+                        onChange={(e) =>
+                          void push({ wecomDocgenTianjiThinking: e.target.value })
+                        }
+                      >
+                        <option value="">{t("wecom.tianjiThinkingDefault")}</option>
+                        {THINKING_LEVELS.map((level) => (
+                          <option key={level} value={level}>
+                            {t(`wecom.tianjiThinking.${level}`)}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  }
+                  hint={
+                    <p className="setting-hint">
+                      {docgenTianjiThinkingEnabled
+                        ? t("wecom.docgenTianjiModelHint")
+                        : t("wecom.tianjiThinkingUnsupported")}
                     </p>
                   }
                 />

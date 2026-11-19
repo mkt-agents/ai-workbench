@@ -26,11 +26,14 @@ import WecomBotHero from "./WecomBotHero";
 import WecomChannelPage from "./WecomChannelPage";
 import { useGlobalStore } from "../core/store";
 import type {
+  AIModelConfig,
   AppSettings,
   DshModelCatalog,
   WecomBotProfile,
   WecomSkywalkingEnv,
 } from "../core/types";
+import { resolveSceneModel } from "../lib/aiSceneModels";
+import { THINKING_LEVELS, thinkingSupported } from "../lib/modelThinking";
 import {
   applyWecomChannel,
   buildWecomSkywalkingPatch,
@@ -517,6 +520,30 @@ export default function WecomSettingsCard() {
     ? MAX_JOBS_CHOICES
     : [...MAX_JOBS_CHOICES, maxJobs].sort((a, b) => a - b);
   const modelValue = settings.wecomDshModel ?? "";
+  // 天玑档：模型下拉来自本地模型库（按 provider 分组），空 = 跟随场景模型。
+  const tianjiModelValue = (settings.wecomTianjiModel ?? "").trim();
+  const tianjiModelGroups = (() => {
+    const byProvider = new Map<string, { value: string; label: string; hint?: string }[]>();
+    for (const model of aiModels) {
+      const value = (model.id ?? "").trim();
+      if (!value) continue;
+      const key = (model.provider ?? "").trim() || "custom";
+      const list = byProvider.get(key) ?? [];
+      list.push({ value, label: model.name || model.model, hint: model.model });
+      byProvider.set(key, list);
+    }
+    return Array.from(byProvider, ([key, options]) => ({ key, label: key, options }));
+  })();
+  // 思考强度按「实际生效的模型」判：钉了用钉的，否则走场景模型回落链。
+  const tianjiEffectiveModel: AIModelConfig | undefined =
+    (tianjiModelValue ? aiModels.find((m) => (m.id ?? "") === tianjiModelValue) : undefined) ??
+    resolveSceneModel("aiHub", aiModels, settings.aiSceneModels) ??
+    aiModels.find((m) => m.isDefault) ??
+    aiModels[0];
+  const tianjiThinkingEnabled = thinkingSupported(
+    tianjiEffectiveModel?.provider,
+    tianjiEffectiveModel?.model,
+  );
   const modelCount =
     catalog?.groups.reduce((total, group) => total + group.options.length, 0) ?? 0;
   // 增强提示词按当前选中侧（私聊 / 群聊）取开关与正文，卡片头和底部计数都用这一份
@@ -1287,6 +1314,47 @@ export default function WecomSettingsCard() {
                 />
               ) : null}
             </div>
+
+            {engine === "tianji" ? (
+              <Row
+                label={t("wecom.tianjiModelRow")}
+                control={
+                  <>
+                    <GroupedSelect
+                      className="wecom-split"
+                      value={tianjiModelValue}
+                      disabled={busy}
+                      fallbackLabel={t("wecom.tianjiModelFollow")}
+                      staleLabel={t("wecom.dshModelMissing")}
+                      searchPlaceholder={t("wecom.dshModelSearch")}
+                      emptyLabel={t("wecom.dshModelNoMatch")}
+                      groups={tianjiModelGroups}
+                      onChange={(next) => void push({ wecomTianjiModel: next })}
+                    />
+                    <select
+                      className="input-field wecom-split-effort"
+                      value={settings.wecomTianjiThinking ?? ""}
+                      disabled={busy || !tianjiThinkingEnabled}
+                      onChange={(e) => void push({ wecomTianjiThinking: e.target.value })}
+                    >
+                      <option value="">{t("wecom.tianjiThinkingDefault")}</option>
+                      {THINKING_LEVELS.map((level) => (
+                        <option key={level} value={level}>
+                          {t(`wecom.tianjiThinking.${level}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                }
+                hint={
+                  <p className="setting-hint">
+                    {tianjiThinkingEnabled
+                      ? t("wecom.tianjiModelHint")
+                      : t("wecom.tianjiThinkingUnsupported")}
+                  </p>
+                }
+              />
+            ) : null}
 
             {engine === "dsh" ? (
               <Row

@@ -9,6 +9,7 @@ mod db_commands;
 pub mod cursor;
 mod ai_commands;
 mod model_capability;
+mod model_budget;
 mod agent_ocr;
 mod agent;
 mod agent_budget;
@@ -31,6 +32,9 @@ mod agent_tools;
 mod agent_undo;
 mod agent_web;
 mod agent_session_log;
+mod agent_task;
+mod agent_transcript;
+mod agent_compaction;
 mod wecom_proto;
 mod wecom_format;
 mod wecom_sanitize;
@@ -360,6 +364,8 @@ pub fn run() {
                     auth_type TEXT DEFAULT 'api',
                     temperature REAL DEFAULT 0.7,
                     max_tokens INTEGER DEFAULT 4096,
+                    output_budget_mode TEXT DEFAULT 'manual',
+                    capability_cache TEXT,
                     is_default INTEGER DEFAULT 0,
                     last_test_ok INTEGER,
                     last_test_at TEXT,
@@ -504,6 +510,8 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN vision INTEGER DEFAULT 0;");
             // visionMode：auto（规则库推断）/ text / vision；旧库回填 auto，由 storage.ts 把旧 vision=1 读成 vision、其余 auto
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN vision_mode TEXT DEFAULT 'auto';");
+            let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN context_window_tokens INTEGER;");
+            db_commands::migrate_model_budget_columns(&conn)?;
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN auth_mode TEXT DEFAULT 'token';");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN config_path TEXT;");
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NOT NULL DEFAULT '';");
@@ -524,6 +532,10 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN scenario TEXT;");
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN task_bind TEXT;");
             {
+                agent_task::init(&conn)?;
+                agent_transcript::init(&conn)?;
+                agent_task::recover(&conn).map_err(|e| e.to_string())?;
+                agent_task::prune_deleted_sessions(&conn)?;
                 let state = app.state::<DbState>();
                 let mut guard = state.conn.lock().map_err(|e| e.to_string())?;
                 *guard = conn;
@@ -739,9 +751,20 @@ pub fn run() {
             ai_commands::list_provider_models,
             ai_commands::infer_model_modality,
             ai_commands::infer_model_max_output,
+            ai_commands::resolve_model_budget,
             ai_commands::generate_text,
             ai_commands::generate_text_stream,
             agent::agent_run,
+            agent::agent_run_task,
+            agent_task::agent_task_load,
+            agent_transcript::agent_session_list,
+            agent_transcript::agent_session_search,
+            agent::agent_run_session,
+            agent::agent_session_compact,
+            agent_transcript::agent_session_page,
+            agent_transcript::agent_session_edit,
+            agent_transcript::agent_session_save,
+            agent_transcript::agent_session_delete,
             agent::agent_decide,
             harness_config::harness_config_load,
             harness_config::harness_list_files,

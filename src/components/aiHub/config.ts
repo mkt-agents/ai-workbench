@@ -81,15 +81,6 @@ export function stepsMutatedWorkspace(
 export const CONTEXT_LIMIT = 12000;
 export const SNIPPET_PICK_LIMIT = 24;
 export const DIRTY_FILE_LIMIT = 30;
-/** Follow-up context: send the last N Q&A pairs to the model, clipped per turn. */
-export const MAX_HISTORY_TURNS = 50;
-/** Hard cap on the transcript chars in one request: 50 × 4000 would blow the model's context. */
-export const MAX_HISTORY_CHARS = 48000;
-/** Verbatim Q&A pairs kept on screen and in the saved session. */
-export const MAX_SAVED_TURNS = 50;
-/** Older rounds fold into one note once the verbatim window is full. */
-export const MAX_DIGEST_CHARS = 2800;
-export const MAX_TURN_CHARS = 4000;
 /** Max diff bytes per file when including dirty content in ai-hub context. */
 export const MAX_DIFF_PER_FILE = 2000;
 /** Max number of files to fetch diff for the PRIMARY repo in ai-hub context. */

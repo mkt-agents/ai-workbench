@@ -1,4 +1,4 @@
-import type { AIModelConfig, AuthType } from "../core/types";
+import type { AIModelConfig, AuthType, ModelCapabilityCache } from "../core/types";
 
 export type AIProviderId = AIModelConfig["provider"];
 export type AuthMode = "bearer" | "api-key" | "anthropic";
@@ -7,9 +7,50 @@ export type ModelPreset = {
   id: string;
   label?: string;
   modality?: string;
-  /** 单次回答最长输出（来自 /models 或离线规则）。 */
+  /** Explicit provider metadata from /models, never inferred catalogue values. */
   maxOutputTokens?: number;
+  contextWindowTokens?: number;
 };
+
+type ModelIdentity = { provider: string; baseUrl: string; model: string };
+
+function normalizeModelIdentity(identity: ModelIdentity): ModelIdentity {
+  return {
+    provider: identity.provider.trim().toLowerCase(),
+    baseUrl: identity.baseUrl.trim().replace(/\/+$/, ""),
+    model: identity.model.trim(),
+  };
+}
+
+/** Validate persisted/imported metadata and discard it after an identity change. */
+export function readModelCapabilityCache(raw: unknown, identity: ModelIdentity): ModelCapabilityCache | undefined {
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return undefined; }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const cache = value as Record<string, unknown>;
+  if (typeof cache.provider !== "string" || typeof cache.baseUrl !== "string" || typeof cache.model !== "string") return undefined;
+  const stored = normalizeModelIdentity({ provider: cache.provider, baseUrl: cache.baseUrl, model: cache.model });
+  const current = normalizeModelIdentity(identity);
+  if (!current.provider || !current.baseUrl || !current.model || stored.provider !== current.provider || stored.baseUrl !== current.baseUrl || stored.model !== current.model) return undefined;
+  const validTokenCount = (n: unknown, min: number): n is number =>
+    typeof n === "number" && Number.isInteger(n) && n >= min && n <= 2000000;
+  const contextWindowTokens = validTokenCount(cache.contextWindowTokens, 4096) ? cache.contextWindowTokens : undefined;
+  const maxOutputTokens = validTokenCount(cache.maxOutputTokens, 1) ? cache.maxOutputTokens : undefined;
+  if (contextWindowTokens === undefined && maxOutputTokens === undefined) return undefined;
+  // Copy only the public metadata fields, including when importing untrusted JSON.
+  return { ...current, contextWindowTokens, maxOutputTokens };
+}
+
+export function capabilityCacheFromModel(identity: ModelIdentity, model?: ModelPreset): ModelCapabilityCache | undefined {
+  if (!model || model.id.trim() !== identity.model.trim()) return undefined;
+  return readModelCapabilityCache({
+    ...identity,
+    contextWindowTokens: model.contextWindowTokens,
+    maxOutputTokens: model.maxOutputTokens,
+  }, identity);
+}
 
 export type AIProviderMeta = {
   value: AIProviderId;

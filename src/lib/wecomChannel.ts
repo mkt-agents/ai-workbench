@@ -529,7 +529,10 @@ async function buildBotApplyPayload(args: {
   const webhookFeishu = await sealWebhook(bot.webhookFeishu);
   const webhookDingtalk = await sealWebhook(bot.webhookDingtalk);
 
+  // 天玑档可以按机器人单独钉一个模型；没钉才回落到「场景模型 → 默认模型」。
+  const pinned = (bot.tianjiModel ?? "").trim();
   const model =
+    (pinned ? models.find((m) => (m.id ?? "") === pinned) : undefined) ??
     resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
     models.find((m) => m.isDefault) ??
     models[0];
@@ -553,6 +556,7 @@ async function buildBotApplyPayload(args: {
         tools: true,
         mode: "",
         vision: Boolean(model.vision),
+        thinking: (bot.tianjiThinking ?? "").trim(),
         diffConfirm: Boolean(settings.agentDiffConfirm),
         alwaysAllow: settings.agentAlwaysAllow ?? [],
         webAllow: settings.agentWebAllow ?? [],
@@ -725,7 +729,10 @@ export async function applyWecomDocgen(
         .filter((s) => s.enabled && selectedMcp.has(s.name.trim()) && s.name.trim() && s.command.trim())
         .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args ?? "" }))
     : [];
+  // 文档天玑档同样允许钉模型；没钉才回落到「场景模型 → 默认模型」。
+  const docgenPinned = (settings.wecomDocgenTianjiModel ?? "").trim();
   const docgenModel =
+    (docgenPinned ? models.find((m) => (m.id ?? "") === docgenPinned) : undefined) ??
     resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
     models.find((m) => m.isDefault) ??
     models[0];
@@ -740,6 +747,7 @@ export async function applyWecomDocgen(
         tools: true,
         mode: "doc",
         vision: Boolean(docgenModel.vision),
+        thinking: (settings.wecomDocgenTianjiThinking ?? "").trim(),
         diffConfirm: false,
         alwaysAllow: [],
         webAllow: settings.agentWebAllow ?? [],

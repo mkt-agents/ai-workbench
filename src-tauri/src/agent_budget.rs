@@ -71,7 +71,7 @@ fn parts_text(parts: &[Value]) -> String {
             out.push_str(t);
         } else if let Some(t) = part.get("thinking").and_then(|v| v.as_str()) {
             out.push_str(t);
-        } else if part.get("type").and_then(|v| v.as_str()) == Some("image") {
+        } else if matches!(part.get("type").and_then(Value::as_str), Some("image" | "image_url")) {
             // An image's cost depends on its resolution; charge a flat estimate.
             out.push_str(&" ".repeat(3_200));
         } else {
@@ -89,7 +89,23 @@ fn parts_text(parts: &[Value]) -> String {
 
 /// Rough token cost of one message, including protocol overhead per message.
 pub(crate) fn message_tokens(message: &Value) -> usize {
-    estimate_tokens(&content_text(message)) + 4
+    let mut cost = estimate_tokens(&content_text(message)) + 4;
+    for field in ["tool_calls", "tool_call_id", "reasoning_content"] {
+        if let Some(value) = message.get(field) {
+            cost += estimate_tokens(&value.to_string());
+        }
+    }
+    if let Some(parts) = message.get("content").and_then(Value::as_array) {
+        for part in parts {
+            cost += 4;
+            if part["type"] == "tool_use" {
+                cost += estimate_tokens(&part.to_string());
+            } else if let Some(id) = part.get("tool_use_id").and_then(Value::as_str) {
+                cost += estimate_tokens(id);
+            }
+        }
+    }
+    cost
 }
 
 pub(crate) fn messages_tokens(messages: &[Value]) -> usize {
@@ -120,7 +136,13 @@ fn is_user_turn(message: &Value) -> bool {
 
 /// Head + tail cut with a note, so the model still sees how the output started and ended.
 fn head_tail(text: &str, max_tokens: usize) -> String {
-    let quarters = max_tokens.saturating_mul(4);
+    // Allocate the cut using the same calibration as message_tokens, and leave
+    // room for the omission marker. Otherwise a small result can grow on every
+    // iteration when it hovers just above the per-result floor.
+    let calibration = CALIBRATION_X100.load(Ordering::Relaxed).max(1);
+    let marker_tokens = estimate_tokens("\n\n…(上下文压缩：这里省略了 18446744073709551615 字符，需要细节请分步查)\n\n");
+    let quarters = max_tokens.saturating_sub(marker_tokens + 2)
+        .saturating_mul(400) / calibration;
     let head_budget = quarters * 2 / 3;
     let tail_budget = quarters / 3;
 
@@ -212,9 +234,12 @@ pub(crate) fn shrink_tool_results(messages: &mut [Value], cap: usize) -> usize {
             return shrunk;
         };
         let target = (size / 2).max(MIN_RESULT_TOKENS);
-        if target >= size || !shrink_tool_message(&mut messages[index], target) {
+        if target >= size { return shrunk; }
+        let mut candidate = messages[index].clone();
+        if !shrink_tool_message(&mut candidate, target) || message_tokens(&candidate) >= size {
             return shrunk;
         }
+        messages[index] = candidate;
         shrunk += 1;
     }
 }
@@ -359,6 +384,18 @@ mod tests {
     }
 
     /// 真实 usage 会把估算系数拉向实际值；离谱的比率被拒收，太小的样本也不收。
+    #[test]
+    fn tool_result_shrinking_makes_progress_below_the_result_floor() {
+        let _guard = CAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let old = CALIBRATION_X100.swap(105, Ordering::Relaxed);
+        let mut messages = vec![tool_msg(&"历史输出".repeat(1000))];
+        let count = shrink_tool_results(&mut messages, 350);
+        let tokens = message_tokens(&messages[0]);
+        CALIBRATION_X100.store(old, Ordering::Relaxed);
+        assert!((1..10).contains(&count), "cuts: {count}");
+        assert!(tokens <= 604, "tokens: {tokens}");
+    }
+
     #[test]
     fn usage_calibrates_the_estimate_factor() {
         let _guard = CAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());

@@ -1,3 +1,4 @@
+import { pageAiHubSession } from "../core/store/invocations";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
@@ -41,6 +42,7 @@ import type { RouteOverride } from "./aiHub/route";
 import { useAskContext } from "./aiHub/useAskContext";
 import { useAskEvents } from "./aiHub/useAskEvents";
 import { useAskSessions } from "./aiHub/useAskSessions";
+import { useAgentTask } from "./aiHub/useAgentTask";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
 import { useHarnessComposer, type HarnessCommand, type HarnessSkillItem } from "./aiHub/useHarnessComposer";
 import {
@@ -200,6 +202,7 @@ function AiHubApp() {
         : "project";
   const [ctxOpen, setCtxOpen] = useState(false);
   /** Persisted-session id the current chat belongs to (null = fresh chat). */
+  const sessionOpenGeneration = useRef(0);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   /** Inline rename state: which session + draft title. */
@@ -286,9 +289,13 @@ function AiHubApp() {
     : settings.agentDiffConfirm === true;
 
   // stream <-> sessions reference each other's callbacks; bridge via ref.
-  const persistRef = useRef<(turns: QaTurn[], firstQuestion: string) => Promise<void>>(
-    async () => {},
-  );
+  const persistRef = useRef<(id: string, revision: number, from: number, turns: QaTurn[]) => Promise<number>>(async () => {
+    throw new Error("Session store unavailable");
+  });
+  const ensureSessionRef = useRef<(question: string) => Promise<string>>(async () => {
+    throw new Error("Session store unavailable");
+  });
+  const agentTask = useAgentTask(track === "code" ? activeSessionId : null);
   const stream = useAskStream({
     selectedModel,
     fallbackModel,
@@ -333,9 +340,10 @@ function AiHubApp() {
         setSettings({ agentAlwaysAllow: [...list, kind].slice(-20) });
       }
     },
-    persistTurns: (turns, q) => {
-      void persistRef.current(turns, q);
-    },
+    persistTurns: (...args) => persistRef.current(...args),
+    ensureSession: (question) => ensureSessionRef.current(question),
+    onSessionCreated: setActiveSessionId,
+    checkpointEnabled: track === "code",
     attachments,
     profileSystemRole: activeProfile?.systemRole,
     profileTemperature: activeProfile?.temperature,
@@ -391,14 +399,19 @@ function AiHubApp() {
     agentWasBusy.current = stream.busy;
   }, [stream.busy, refreshAgentBranch]);
   const sessions = useAskSessions({
-    task: "none",
     activeSessionId,
     setActiveSessionId,
     setError: stream.setError,
     onNotice: showHint,
     onRemovedActive: stream.resetChat,
+    flushTranscript: stream.flushTranscript,
   });
   persistRef.current = sessions.persistTurns;
+  ensureSessionRef.current = sessions.ensureSession;
+  const resumeAgentTask = () => {
+    if (agentTask?.status !== "interrupted") return;
+    void stream.send(t("task.resumeMessage"), undefined, { mode: "project", attachments: [], resume: agentTask });
+  };
 
   const answers = useAnswerActions({
     history: stream.history,
@@ -430,9 +443,15 @@ function AiHubApp() {
     [setSettings, t],
   );
   /** 内置命令：只放真能执行的动作，别让面板里出现点了没反应的条目。 */
+  const compactSession = async (focus: string) => {
+    if (stream.busy) return;
+    const result = await stream.compact(focus);
+    if (result) showHint(t(result.compacted ? "context.compacted" : "context.nothing"));
+  };
   const harnessCommands = useMemo<HarnessCommand[]>(
     () => [
-      { id: "clear", label: t("palette.clear"), hint: t("palette.clearHint"), run: () => stream.resetChat() },
+      { id: "clear", label: t("palette.clear"), hint: t("palette.clearHint"), run: () => startNewChat() },
+      { id: "compact", label: t("context.command"), hint: t("context.commandHint"), run: () => void compactSession("") },
       {
         id: "plan",
         label: t("palette.plan"),
@@ -797,6 +816,7 @@ function AiHubApp() {
   }, []);
 
   const startNewChat = () => {
+    sessionOpenGeneration.current++;
     if (stream.busy) return;
     stream.resetChat();
     setRouteOverride("auto");
@@ -895,6 +915,15 @@ function AiHubApp() {
   }, [selectedModel]);
 
   const sendAsk = async () => {
+    const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(input.trim());
+    if (compact) {
+      if (!stream.busy) {
+        setInput("");
+        await compactSession(compact[1] ?? "");
+      }
+      return;
+    }
+    sessionOpenGeneration.current++;
     const hasImages = attachments.some((a) => a.image);
     // 图片 + 当前模型不看图：优先自动切到会话里的看图模型（下一帧再发），
     // 没有看图模型则直接发——harness 会把图降级成文字占位，不再硬拦。
@@ -1038,17 +1067,22 @@ function AiHubApp() {
   };
 
   /** Restore a persisted session into the current chat. */
-  const openSession = (s: AiHubSession) => {
-    if (stream.busy) {
-      flashBusyHint();
-      return;
+  const openSession = async (session: AiHubSession) => {
+    if (stream.busy) { flashBusyHint(); return; }
+    const generation = ++sessionOpenGeneration.current;
+    try {
+      // Reopening also lets the user recover after a revision conflict.
+      await stream.flushTranscript(session.id).catch(() => {});
+      const page = await pageAiHubSession(session.id);
+      if (generation !== sessionOpenGeneration.current || stream.isBusy()) return;
+      stream.loadSession(session.id, page);
+      setRouteOverride("auto");
+      setActiveSessionId(session.id);
+      setHistoryOpen(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } catch (error) {
+      if (generation === sessionOpenGeneration.current) stream.setError(String(error));
     }
-    const turns = s.turns || [];
-    stream.loadSession(turns);
-    setRouteOverride("auto");
-    setActiveSessionId(s.id);
-    setHistoryOpen(false);
-    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const commitRename = async (id: string, title: string) => {
@@ -1068,7 +1102,7 @@ function AiHubApp() {
       title: t("deleteSession"),
       message: t("deleteSessionBody", {
         title: s.title || t("newChat"),
-        n: Math.ceil((s.turns?.length ?? 0) / 2),
+        n: Math.ceil(s.total / 2),
       }),
       warning: t("deleteSessionWarn"),
       confirmText: t("deleteConfirm"),
@@ -1082,7 +1116,7 @@ function AiHubApp() {
     const skipped = list.filter((s) => stream.busy && s.id === activeSessionId);
     const targets = list.filter((s) => !(stream.busy && s.id === activeSessionId));
     if (targets.length === 0) return;
-    const turns = targets.reduce((n, s) => n + Math.ceil((s.turns?.length ?? 0) / 2), 0);
+    const turns = targets.reduce((n, s) => n + Math.ceil(s.total / 2), 0);
     const ok = await confirm({
       title: t("deleteManyTitle"),
       message: t("deleteManyBody", { n: targets.length, turns }),
@@ -1211,6 +1245,11 @@ function AiHubApp() {
             }}
             answer={stream.answer}
             turns={stream.history}
+            historyStart={stream.historyStart}
+            legacySummary={stream.legacySummary}
+            contextInfo={stream.contextInfo}
+            loadingOlder={stream.loadingOlder}
+            onLoadOlder={stream.loadOlder}
             pending={stream.pending}
             source={stream.source}
             canRegenerate={Boolean(stream.lastQuestionRef.current)}
@@ -1225,7 +1264,11 @@ function AiHubApp() {
             agentApproval={stream.agentApproval}
             stopping={stream.stopping}
             onDecideAgent={(decision) => void stream.decideAgent(decision)}
-            onContinue={() => void stream.send(t("agent.continuePrompt"))}
+            onContinue={agentTask?.status === "interrupted"
+              ? resumeAgentTask
+              : () => void stream.send(t("agent.continuePrompt"))}
+            agentTask={agentTask}
+            onResumeTask={resumeAgentTask}
             hasSnippets={(snippets.snippets?.length ?? 0) > 0 || harnessSkills.length > 0}
             // 工具栏的片段按钮改成「插入 /」：命令、技能、片段都在同一个面板里。
             onToggleSnippets={() => {

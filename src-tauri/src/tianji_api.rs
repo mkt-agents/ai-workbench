@@ -564,6 +564,7 @@ fn build_agent_request(
         permission,
         tools: agent.tools,
         vision: agent.vision,
+        thinking: (!agent.thinking.trim().is_empty()).then(|| agent.thinking.trim().to_string()),
         diff_confirm: agent.diff_confirm,
         always_allow: agent.always_allow.clone(),
         web_allow: agent.web_allow.clone(),

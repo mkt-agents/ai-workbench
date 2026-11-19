@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, Gauge, MessagesSquare, Terminal } from "lucide-react";
+import { Activity, Check, Copy, Gauge, MessagesSquare, Terminal } from "lucide-react";
+import { useGlobalStore } from "../core/store";
 import type { WecomStatus } from "../lib/wecomChannel";
 import {
   fetchWecomLog,
@@ -25,6 +26,54 @@ function peekLine(text: string): string {
     .map((s) => s.trim())
     .find(Boolean);
   return (line ?? "").replace(/^#+\s*/, "").slice(0, 160);
+}
+
+/**
+ * 会话正文的「复制全文」按钮。
+ *
+ * 旁证里的答案常带 JSON / 表格，直接框选复制会带上折行和滚动条残留；
+ * 这里一次性把原文交给系统剪贴板。失败也要说出来（剪贴板可能因焦点
+ * 丢失或被策略限制而失败），否则按钮看起来像点坏了。
+ */
+function SessionCopy({ text }: { text: string }) {
+  const { t } = useTranslation("settings");
+  const copyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
+  const [feedback, setFeedback] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const copy = async () => {
+    if (!text) return;
+    let next: "copied" | "failed" = "copied";
+    try {
+      await copyToClipboard(text);
+    } catch {
+      next = "failed";
+    }
+    window.clearTimeout(timer.current);
+    setFeedback(next);
+    timer.current = window.setTimeout(() => setFeedback("idle"), next === "failed" ? 2500 : 1500);
+  };
+
+  const label = feedback === "copied"
+    ? t("wecom.diag.sessionCopied")
+    : feedback === "failed"
+      ? t("wecom.diag.sessionCopyFailed")
+      : t("wecom.diag.sessionCopy");
+
+  return (
+    <button
+      type="button"
+      className={`wecom-session-copy${feedback === "copied" ? " is-copied" : ""}${feedback === "failed" ? " is-failed" : ""}`}
+      onClick={() => void copy()}
+      title={label}
+      aria-label={label}
+    >
+      {feedback === "copied" ? <Check size={12} aria-hidden /> : <Copy size={12} aria-hidden />}
+      <span>{label}</span>
+    </button>
+  );
 }
 
 /**
@@ -481,6 +530,10 @@ export default function WecomDiagnosticsPage({ status }: { status: WecomStatus |
                           <span className="wecom-diag-u">{entry.user}</span>
                           <span className="wecom-session-peek">{peekLine(entry.assistant)}</span>
                         </summary>
+                        {/* 复制全文放在正文顶上、靠右：不压在文字上，也不挤折行 */}
+                        <div className="wecom-session-tools">
+                          <SessionCopy text={entry.assistant} />
+                        </div>
                         <p className="wecom-session-full">{entry.assistant}</p>
                       </details>
                       {entry.requestId ? (

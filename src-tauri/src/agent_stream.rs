@@ -69,6 +69,9 @@ pub(crate) struct AnthropicStream {
     /// Text / raw tool input per block, parallel to `blocks`.
     texts: Vec<String>,
     args: Vec<String>,
+    /// extended thinking 的正文与签名，与 `blocks` 平行；回放时必须原样带上。
+    thoughts: Vec<String>,
+    signatures: Vec<String>,
     input_tokens: u64,
     output_tokens: u64,
     /// Tokens served from the prompt cache (billed at a fraction of the input price).
@@ -108,6 +111,19 @@ impl AnthropicStream {
                 if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
                     self.args[index] = tool_input_raw(block.get("input"));
                 }
+                if block.get("type").and_then(|v| v.as_str()) == Some("thinking") {
+                    // 少数网关在 start 里就把思考正文和签名一起给了。
+                    self.thoughts[index] = block
+                        .get("thinking")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.signatures[index] = block
+                        .get("signature")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                }
                 self.texts[index] = text.clone();
                 self.blocks[index] = block;
                 Ok((!text.is_empty()).then_some(text))
@@ -131,7 +147,23 @@ impl AnthropicStream {
                         self.args[index].push_str(piece);
                         Ok(None)
                     }
-                    // thinking_delta / signature_delta: not answer text, blocks are kept out.
+                    // 思考内容不是答案正文，但必须攒起来：多轮工具调用要原样回放。
+                    "thinking_delta" => {
+                        let piece = delta.get("thinking").and_then(|v| v.as_str()).unwrap_or("");
+                        if !piece.is_empty() {
+                            self.grow(index);
+                            self.thoughts[index].push_str(piece);
+                        }
+                        Ok(None)
+                    }
+                    "signature_delta" => {
+                        let piece = delta.get("signature").and_then(|v| v.as_str()).unwrap_or("");
+                        if !piece.is_empty() {
+                            self.grow(index);
+                            self.signatures[index].push_str(piece);
+                        }
+                        Ok(None)
+                    }
                     _ => Ok(None),
                 }
             }
@@ -170,13 +202,18 @@ impl AnthropicStream {
 
     /// The folded `message` body (`{ "content": [...] }`), ready for `parse_anthropic`.
     pub(crate) fn into_body(self) -> Value {
-        let AnthropicStream { blocks, texts, args, .. } = self;
-        // `thinking` / `redacted_thinking` blocks are dropped: replaying one without its
-        // signature is rejected by the provider, and they are never shown as answer text.
+        let AnthropicStream { blocks, texts, args, thoughts, signatures, .. } = self;
+        // `thinking` / `redacted_thinking` 必须原样回放（含 signature）：多轮工具调用时
+        // Anthropic 要求 assistant 轮的思考块完整在场，删掉会被拒。它们不当作答案正文。
         let content: Vec<Value> = blocks
             .into_iter()
             .enumerate()
-            .filter(|(_, block)| matches!(block.get("type").and_then(|v| v.as_str()), Some("text") | Some("tool_use")))
+            .filter(|(_, block)| {
+                matches!(
+                    block.get("type").and_then(|v| v.as_str()),
+                    Some("text") | Some("tool_use") | Some("thinking") | Some("redacted_thinking")
+                )
+            })
             .map(|(i, mut block)| {
                 match block.get("type").and_then(|v| v.as_str()).unwrap_or("") {
                     "text" => block["text"] = json!(texts.get(i).cloned().unwrap_or_default()),
@@ -186,6 +223,10 @@ impl AnthropicStream {
                             .ok()
                             .filter(|v| v.is_object())
                             .unwrap_or_else(|| json!({}));
+                    }
+                    "thinking" => {
+                        block["thinking"] = json!(thoughts.get(i).cloned().unwrap_or_default());
+                        block["signature"] = json!(signatures.get(i).cloned().unwrap_or_default());
                     }
                     _ => {}
                 }
@@ -200,6 +241,8 @@ impl AnthropicStream {
             self.blocks.push(json!({ "type": "text" }));
             self.texts.push(String::new());
             self.args.push(String::new());
+            self.thoughts.push(String::new());
+            self.signatures.push(String::new());
         }
     }
 
@@ -208,6 +251,8 @@ impl AnthropicStream {
         self.blocks.clear();
         self.texts.clear();
         self.args.clear();
+        self.thoughts.clear();
+        self.signatures.clear();
         for block in arr {
             let kind = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
             self.blocks.push(block.clone());
@@ -217,6 +262,16 @@ impl AnthropicStream {
                 String::new()
             });
             self.args.push(if kind == "tool_use" { tool_input_raw(block.get("input")) } else { String::new() });
+            self.thoughts.push(if kind == "thinking" {
+                block.get("thinking").and_then(|v| v.as_str()).unwrap_or("").to_string()
+            } else {
+                String::new()
+            });
+            self.signatures.push(if kind == "thinking" {
+                block.get("signature").and_then(|v| v.as_str()).unwrap_or("").to_string()
+            } else {
+                String::new()
+            });
         }
     }
 
@@ -490,6 +545,7 @@ mod tests {
             r#"{"type":"ping"}"#,
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"嗯"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             // Tool input cut off mid-JSON falls back to `{}` instead of failing the round.
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t","name":"grep","input":{}}}"#,
@@ -498,10 +554,13 @@ mod tests {
         ]);
         let body = acc.into_body();
         let blocks = body["content"].as_array().unwrap();
-        // `thinking` blocks are dropped: replaying a half-filled one is rejected by the provider.
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0]["name"], json!("grep"));
-        assert_eq!(blocks[0]["input"], json!({}));
+        // thinking 块连同 signature 一起回放：多轮工具调用时缺了会被 provider 拒。
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], json!("thinking"));
+        assert_eq!(blocks[0]["thinking"], json!("嗯"));
+        assert_eq!(blocks[0]["signature"], json!("sig-1"));
+        assert_eq!(blocks[1]["name"], json!("grep"));
+        assert_eq!(blocks[1]["input"], json!({}));
 
         // An error event is surfaced, not swallowed.
         let mut acc = AnthropicStream::default();

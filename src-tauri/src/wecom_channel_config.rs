@@ -177,9 +177,12 @@ pub(crate) fn normalize_request(
 
 fn model_value(model: &crate::ai_commands::AIModelConfig) -> Value {
     // DB row identity, display labels and random encryption are not model routing.
+    // `visionMode` 必须在场：三态从「自动」切到「文本 / 看图」时要能触发通道重下发，
+    // 否则天玑档仍按旧快照决定是否内联图片（见 wecom_orchestrator 的 accepts_images）。
     json!({"provider": model.provider, "apiKey": model.api_key,
         "authType": model.auth_type, "baseUrl": model.base_url, "model": model.model,
-        "temperature": model.temperature, "maxTokens": model.max_tokens, "vision": model.vision})
+        "temperature": model.temperature, "maxTokens": model.max_tokens, "vision": model.vision,
+        "visionMode": model.vision_mode})
 }
 
 pub(crate) fn snapshot(req: &WecomApplyRequest) -> ConfigSnapshot {
@@ -292,7 +295,7 @@ pub(crate) fn snapshot(req: &WecomApplyRequest) -> ConfigSnapshot {
         out.put(
             "agentPolicy",
             json!({"services": normalized_set(&a.services), "tools":a.tools,
-            "mode":a.mode, "vision":a.vision, "diffConfirm":a.diff_confirm,
+            "mode":a.mode, "vision":a.vision, "thinking":a.thinking, "diffConfirm":a.diff_confirm,
             "alwaysAllow":normalized_set(&a.always_allow), "webAllow":normalized_set(&a.web_allow),
             "webTier":a.web_tier, "webSearchProvider":a.web_search_provider,
             "webSearchKey":a.web_search_key, "subagents":a.subagents}),

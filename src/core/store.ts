@@ -1,10 +1,11 @@
+import { listAiHubSessions, removeAiHubSessions, saveAiHubSession } from "./store/invocations";
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
   RecentProject, WebPlugin, UserScript, ScriptTemplate, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
-  Snippet, WorkTask, AiHubSession, CursorUpdateState, CursorCleanupResult,
+  Snippet, WorkTask, CursorUpdateState, CursorCleanupResult,
   QuickAppLauncher,
   McpServer,
 } from './types';
@@ -31,8 +32,7 @@ const isOlderVersion = (v1: string, v2: string): boolean =>
   compareVersions(v1, v2) < 0;
 
 /**
- * How many ai-hub conversations SQLite keeps. The whole table is rewritten on every
- * save, so this stays a cap — but eviction must never be silent (see upsertAiHubSession).
+ * Number of conversations retained in the history list. Active tasks are protected.
  */
 export const MAX_AI_HUB_SESSIONS = 50;
 
@@ -365,8 +365,7 @@ interface StoreState extends GlobalState, Invocations {
 
   // AI Hub sessions
   loadAiHubSessions: () => Promise<void>;
-  /** Insert or update a session (by id); caps the stored list at 30 by updatedAt. */
-  upsertAiHubSession: (session: AiHubSession) => Promise<string[]>;
+  saveAiHubSession: (id: string, title: string, create: boolean) => Promise<string[]>;
   deleteAiHubSession: (id: string) => Promise<void>;
   /** 批量删除：一次落库，不要循环调用单条删除（每次都会整表重写）。 */
   deleteAiHubSessions: (ids: string[]) => Promise<void>;
@@ -1403,40 +1402,20 @@ export const useGlobalStore = create<StoreState>()(
         }),
 
       loadAiHubSessions: async () => withTable("ai_hub_sessions", async () => {
-        const sessions = await storage.aiHubSessions.load();
-        set({ aiHubSessions: sessions });
+        set({ aiHubSessions: await listAiHubSessions() });
       }),
 
-      /** Returns the titles of sessions pushed past the cap, so the UI can say what it lost. */
-      upsertAiHubSession: async (session) => withTable<string[]>("ai_hub_sessions", async () => {
-        const without = get().aiHubSessions.filter((s) => s.id !== session.id);
-        let sessions = [session, ...without];
-        const evicted: string[] = [];
-        if (sessions.length > MAX_AI_HUB_SESSIONS) {
-          // Drop the stalest beyond the cap (list is newest-first by design).
-          const kept = [...sessions]
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-            .slice(0, MAX_AI_HUB_SESSIONS);
-          const keepIds = new Set(kept.map((s) => s.id));
-          for (const s of sessions) if (!keepIds.has(s.id)) evicted.push(s.title || s.id);
-          sessions = kept;
-        }
-        await storage.aiHubSessions.save(sessions);
-        set({ aiHubSessions: sessions });
+      saveAiHubSession: async (id, title, create) => withTable("ai_hub_sessions", async () => {
+        const evicted = await saveAiHubSession(id, title, create);
+        set({ aiHubSessions: await listAiHubSessions() });
         return evicted;
       }),
 
-      deleteAiHubSession: async (id) => withTable("ai_hub_sessions", async () => {
-        const sessions = get().aiHubSessions.filter((s) => s.id !== id);
-        await storage.aiHubSessions.save(sessions);
-        set({ aiHubSessions: sessions });
-      }),
+      deleteAiHubSession: async (id) => get().deleteAiHubSessions([id]),
 
       deleteAiHubSessions: async (ids) => withTable("ai_hub_sessions", async () => {
-        const drop = new Set(ids);
-        const sessions = get().aiHubSessions.filter((s) => !drop.has(s.id));
-        await storage.aiHubSessions.save(sessions);
-        set({ aiHubSessions: sessions });
+        await removeAiHubSessions(ids);
+        set({ aiHubSessions: await listAiHubSessions() });
       }),
 
       // Quick app launchers

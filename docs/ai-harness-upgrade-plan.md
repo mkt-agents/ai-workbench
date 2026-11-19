@@ -937,3 +937,38 @@ P0 的 7 项里，有 4 项（P0-1/2/4/5）不是"新增能力"，而是**当前
 | 联网三级 + 可选搜索 | 已落地 | `webTier` off/allowlist/open；Brave/Tavily `web_search`（需配置 key） |
 
 评分刷新（编码工作流口径，相对 M0 的 20/30）：治理仍 5；执行闭环 / 工具面 / 上下文 / 可观测约 4；生态约 3.5——合计约 **25.5 / 30**。仍弱于 Claude Code 的 LSP 深度与 Agent teams、弱于 DSH 的插件市场与 PTC；本机运维与四档治理仍是天玑独有优势。
+
+## 桌面 Code 轨任务检查点
+
+天玑使用本机 SQLite 保存每个 Code 会话最近任务的计划、动作及验证结果。动作和 hooks 在执行前记录意图。恢复时，未保存结果的动作会显示为「结果待核对」。用户打开会话并手动继续。工作区、分支或已记录路径有变化时，天玑先做只读核对，保存新的计划，等待用户批准，再按当前权限执行。验证证据来自标记了 `verification: true` 的命令退出码，后续改动会使证据过期。
+
+Windows 桌面回归通过 [test-agent-checkpoint-desktop.mjs](../scripts/test-agent-checkpoint-desktop.mjs) 驱动独立的 WebView2 测试实例。测试会在第一次文件写入后强制关闭测试实例，然后打开历史会话、点击继续和审批，并验证外部改动、重复启动与权限收紧。脚本使用 Node.js 22 或更高版本、本机 Git 和 WebView2，端口 `14772`、`14773`、`14774` 分别用于 Vite、假模型与 WebView2 调试。
+
+```powershell
+# 在一个终端启动本机前端
+npm run dev -- --port 14772 --strictPort
+
+# 在另一个终端构建使用独立应用标识的测试实例并运行回归
+$env:TAURI_CONFIG = '{"identifier":"com.ai-workbench.checkpoint-test","build":{"devUrl":"http://localhost:14772"}}'
+cargo build --offline --manifest-path src-tauri/Cargo.toml --bin ai_workbench
+Remove-Item Env:TAURI_CONFIG
+node scripts/test-agent-checkpoint-desktop.mjs
+```
+
+### 桌面长会话
+
+Code 和 Work 共用 SQLite 会话原文。打开会话时加载最近 50 轮，可以继续向上加载并导出全部原文。旧版摘要会单独显示，已被旧版折叠的原文无法恢复。
+
+模型广场的高级设置可填写模型上下文窗口，未知窗口默认 48,000 token。天玑设置中的上下文预算可以额外封顶。估算输入达到可用预算的 80% 时，先裁短早期工具输出，再按完整问答生成摘要，目标约为 65%。空闲时可以运行 `/compact` 或 `/compact <保留重点>`。Windows 回归脚本同时覆盖 120 轮、历史导出、取消、切换模型和超窗重试。
+
+### 模型窗口与单次输出预算（2026-11-19）
+
+桌面 Code/Work 的请求、压缩和用量展示共用 `model_budget::resolve_budget`。窗口按「手动覆盖 → 接口能力缓存 → 精确型号资料 → 未知 48,000」解析，天玑的上下文预算作为额外上限。接口缓存只保留明确的上下文窗口和输出能力，绑定提供商、地址及模型；通用 `max_tokens` 字段不能证明模型窗口或最大输出，未确认的中转型号也不匹配近似名称。
+
+新配置默认自动输出：预留取 8,192、已知模型输出上限、有效窗口三分之一的最小值。可改为手动精确输入；旧配置迁移后保持原手动值。桌面请求取消隐含的 8k 输出截断，实际请求与详情中的输出预留一致。思考共用输出预留，调整或关闭会说明原因；输出与工具定义已占满窗口时拒绝请求并显示错误。其它通道保持原运行策略。
+
+可用内容预算 = 有效窗口 − 工具定义 − 输出预留。进度条展示「含工具定义的总输入 / 有效窗口」，颜色按内容预算的压缩压力决定。详情列出窗口来源、输出能力、预留和触发点。换模型、降级以及移除工具后重新计算。历史快照不补造新的窗口百分比，主动压缩完成后也等待下次请求计算用量。
+
+`scripts/test-context-budget-ui.mjs` 使用隔离 Edge 实例覆盖中英文、窄窗、设置切换及用量布局。Rust 回归覆盖预算解析、显式接口元数据、SQLite 迁移、用量重启兼容，以及假模型收到的真实输出上限。运行前端构建、Rust 测试及桌面检查点回归后再判断验证结果。
+
+`scripts/fixtures/test-model-budget-shortcut.mjs` 挂载真实模型设置组件与全局 store，仅 mock 原生 IPC，覆盖全局预算变化后的 Ctrl/Meta+Enter、输入法保护及保存重载。该脚本需要 Playwright 和本机 Edge，可通过 `PLAYWRIGHT_MODULE` 指定 Playwright 模块路径。

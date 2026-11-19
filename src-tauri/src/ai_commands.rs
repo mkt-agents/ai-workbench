@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+pub use crate::model_capability::ModelCapabilityCache;
 
 use crate::config::{
     ErrorCode, GENERATE_CONNECT_TIMEOUT_SECS, GENERATE_STREAM_IDLE_SECS, GENERATE_TEXT_TIMEOUT_SECS,
@@ -20,6 +21,13 @@ pub struct AIModelConfig {
     pub model: String,
     pub temperature: f64,
     pub max_tokens: i64,
+    #[serde(default)]
+    pub context_window_tokens: Option<usize>,
+    /// Missing mode preserves legacy maxTokens semantics.
+    #[serde(default)]
+    pub output_budget_mode: Option<String>,
+    #[serde(default)]
+    pub capability_cache: Option<ModelCapabilityCache>,
     pub is_default: bool,
     #[serde(default)]
     pub created_at: Option<String>,
@@ -38,6 +46,16 @@ pub struct AIModelConfig {
 pub struct ModelConnectionResult {
     pub success: bool,
     pub message: String,
+}
+
+/// Preview exactly the desktop resolver, before any tool schemas are attached.
+#[tauri::command]
+pub fn resolve_model_budget(
+    config: AIModelConfig,
+    context_tokens: Option<usize>,
+    thinking: Option<String>,
+) -> Result<crate::model_budget::ModelBudget, String> {
+    crate::model_budget::resolve_budget(&config, context_tokens.unwrap_or(0), 0, thinking.as_deref())
 }
 
 #[tauri::command]
@@ -129,6 +147,9 @@ pub struct ListedModel {
     /// 厂商 /models 声明的单次 completion 上限（非 context_length）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Explicit provider total-window metadata; never a request output setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -249,14 +270,13 @@ fn parse_openai_models_response(text: &str, provider: &str) -> Vec<ListedModel> 
                         .as_str()
                         .to_string()
                 });
-            let max_output_tokens = max_output_tokens_from_item(&item).or_else(|| {
-                crate::model_capability::infer_max_output_tokens(provider, &id)
-            });
+            let max_output_tokens = max_output_tokens_from_item(&item);
             Some(ListedModel {
                 id,
                 label: None,
                 modality,
                 max_output_tokens,
+                context_window_tokens: context_window_tokens_from_item(&item),
             })
         })
         .collect();
@@ -321,18 +341,17 @@ pub fn infer_model_modality(provider: String, model: String) -> String {
         .to_string()
 }
 
-/// 离线推断单次回答最长输出（供前端「最长输出」滑块预填）。无规则时返回 None。
+/// 查询精确目录中的输出能力；未知型号返回 None，不代表每次请求的输出预留。
 #[tauri::command]
 pub fn infer_model_max_output(provider: String, model: String) -> Option<u32> {
     crate::model_capability::infer_max_output_tokens(&provider, &model)
 }
 
-/// 从 /models 单条记录读 completion 上限。**不用** context_length（那是上下文窗口）。
+/// Only explicitly named output capacities. Generic max_tokens is ambiguous.
 fn max_output_tokens_from_item(item: &serde_json::Value) -> Option<u32> {
     const KEYS: &[&str] = &[
         "max_completion_tokens",
         "max_output_tokens",
-        "max_tokens",
         "completion_tokens",
     ];
     for key in KEYS {
@@ -348,9 +367,21 @@ fn max_output_tokens_from_item(item: &serde_json::Value) -> Option<u32> {
         }
     }
     if let Some(limits) = item.get("per_request_limits") {
-        for key in ["completion_tokens", "max_completion_tokens", "max_tokens"] {
+        for key in KEYS {
             if let Some(n) = json_positive_u32(limits.get(key)) {
                 return Some(n);
+            }
+        }
+    }
+    None
+}
+
+fn context_window_tokens_from_item(item: &serde_json::Value) -> Option<usize> {
+    for source in [Some(item), item.get("top_provider"), item.get("limits")].into_iter().flatten() {
+        for key in ["context_window_tokens", "context_length", "context_window", "max_context_tokens", "max_context_length"] {
+            if let Some(tokens) = json_positive_u32(source.get(key)).map(|n| n as usize)
+                .filter(|n| crate::model_capability::valid_context_window(*n)) {
+                return Some(tokens);
             }
         }
     }
@@ -360,8 +391,8 @@ fn max_output_tokens_from_item(item: &serde_json::Value) -> Option<u32> {
 fn json_positive_u32(value: Option<&serde_json::Value>) -> Option<u32> {
     match value {
         Some(serde_json::Value::Number(n)) => {
-            let v = n.as_u64().or_else(|| n.as_f64().map(|f| f as u64))?;
-            if v > 0 && v <= u32::MAX as u64 {
+            let v = n.as_u64()?;
+            if v > 0 && v <= crate::model_capability::MAX_CAPABILITY_TOKENS as u64 {
                 Some(v as u32)
             } else {
                 None
@@ -369,7 +400,7 @@ fn json_positive_u32(value: Option<&serde_json::Value>) -> Option<u32> {
         }
         Some(serde_json::Value::String(s)) => {
             let v: u64 = s.trim().parse().ok()?;
-            if v > 0 && v <= u32::MAX as u64 {
+            if v > 0 && v <= crate::model_capability::MAX_CAPABILITY_TOKENS as u64 {
                 Some(v as u32)
             } else {
                 None
@@ -1026,6 +1057,55 @@ pub async fn detect_local_ai_endpoints() -> Result<Vec<LocalAiEndpoint>, String>
 #[cfg(test)]
 mod tests {
     use super::strip_think_tags;
+
+    #[test]
+    fn listed_models_do_not_guess_output_from_ids_or_generic_max_tokens() {
+        let models = super::parse_openai_models_response(
+            r#"{"data":[{"id":"gpt-4o","max_tokens":128000},{"id":"gateway-alias","top_provider":{"max_tokens":64000},"per_request_limits":{"max_tokens":8000}}]}"#,
+            "openai",
+        );
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().all(|model| model.max_output_tokens.is_none()));
+    }
+
+    #[test]
+    fn listed_models_reject_fractional_and_unbounded_output_metadata() {
+        let models = super::parse_openai_models_response(
+            r#"[{"id":"a","max_output_tokens":8192.5},{"id":"b","max_completion_tokens":2000001},{"id":"c","max_output_tokens":0}]"#,
+            "custom",
+        );
+        assert!(models.iter().all(|model| model.max_output_tokens.is_none()));
+    }
+
+    #[test]
+    fn listed_models_keep_explicit_window_and_output_metadata_separate() {
+        let models = super::parse_openai_models_response(
+            r#"{"data":[{"id":"b","top_provider":{"context_length":1000000,"max_completion_tokens":384000}},{"id":"a","context_window_tokens":" 64000 ","max_output_tokens":" 2048 "},{"id":"c","context_length":2048,"max_tokens":10000},{"id":"d","per_request_limits":{"completion_tokens":"4000"}},{"id":"e","context_length":1000000}] }"#,
+            "custom",
+        );
+        assert_eq!((models[0].context_window_tokens, models[0].max_output_tokens), (Some(64_000), Some(2048)));
+        assert_eq!((models[1].context_window_tokens, models[1].max_output_tokens), (Some(1_000_000), Some(384_000)));
+        assert_eq!((models[2].context_window_tokens, models[2].max_output_tokens), (None, None));
+        assert_eq!(models[3].max_output_tokens, Some(4000));
+        assert_eq!((models[4].context_window_tokens, models[4].max_output_tokens), (Some(1_000_000), None));
+    }
+
+    #[test]
+    fn old_config_defaults_and_preview_follow_the_shared_resolver() {
+        let config: super::AIModelConfig = serde_json::from_value(serde_json::json!({
+            "name":"legacy", "provider":"custom", "apiKey":"", "baseUrl":"https://example.test/v1",
+            "model":"unknown", "temperature":0.7, "maxTokens":12000, "isDefault":false
+        })).unwrap();
+        assert!(config.output_budget_mode.is_none());
+        assert!(config.capability_cache.is_none());
+        let budget = super::resolve_model_budget(config, Some(24000), None).unwrap();
+        assert_eq!((budget.effective_window, budget.output_reserve, budget.input_budget), (24_000, 12_000, 12_000));
+        let value = serde_json::to_value(budget).unwrap();
+        assert_eq!(value["outputMode"], "manual");
+        assert_eq!(value["windowSource"], "fallback");
+        assert_eq!(value["schemaTokens"], 0);
+        assert!(value.get("thinkingBudget").is_none());
+    }
 
     #[test]
     fn strips_think_blocks_and_orphan_close_tags() {

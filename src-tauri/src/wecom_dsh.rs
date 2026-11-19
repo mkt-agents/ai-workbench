@@ -1577,7 +1577,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
 pub fn acp_image_block(media_type: &str, data_base64: &str) -> Value {
     json!({
         "type": "image",
-        "mimeType": normalize_image_media_type(media_type),
+        "mimeType": crate::wecom_media::normalize_image_media_type(media_type),
         "data": data_base64,
     })
 }
@@ -1585,21 +1585,6 @@ pub fn acp_image_block(media_type: &str, data_base64: &str) -> Value {
 /// ACP 文本 content block。
 pub fn acp_text_block(text: &str) -> Value {
     json!({ "type": "text", "text": text })
-}
-
-fn normalize_image_media_type(raw: &str) -> &'static str {
-    let base = raw
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    match base.as_str() {
-        "image/png" => "image/png",
-        "image/webp" => "image/webp",
-        "image/gif" => "image/gif",
-        _ => "image/jpeg",
-    }
 }
 
 struct PreparedLaunch {
@@ -3340,14 +3325,12 @@ mod tests {
             Some("image/jpeg")
         );
         assert_eq!(b.get("data").and_then(|v| v.as_str()), Some("AAAA"));
-        // png / webp / gif 原样保留，未知类型回退 jpeg
-        assert_eq!(normalize_image_media_type("image/PNG"), "image/png");
-        assert_eq!(normalize_image_media_type("image/webp"), "image/webp");
-        assert_eq!(normalize_image_media_type("image/gif"), "image/gif");
-        assert_eq!(
-            normalize_image_media_type("application/octet-stream"),
-            "image/jpeg"
-        );
+        // png / webp / gif 原样保留，未知类型回退 jpeg（实现已迁到 wecom_media）
+        let normalize = crate::wecom_media::normalize_image_media_type;
+        assert_eq!(normalize("image/PNG"), "image/png");
+        assert_eq!(normalize("image/webp"), "image/webp");
+        assert_eq!(normalize("image/gif"), "image/gif");
+        assert_eq!(normalize("application/octet-stream"), "image/jpeg");
     }
 
     #[test]

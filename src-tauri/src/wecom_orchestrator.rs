@@ -46,6 +46,10 @@ pub struct WecomAgentConfig {
     pub mode: String,
     #[serde(default)]
     pub vision: bool,
+    /// 思考强度：`low` / `medium` / `high`；空 = 模型默认。
+    /// 只有 Anthropic 与 OpenAI o 系 / gpt-5 认，其余线路由 `agent` 侧静默忽略。
+    #[serde(default)]
+    pub thinking: String,
     #[serde(default)]
     pub diff_confirm: bool,
     #[serde(default)]
@@ -80,6 +84,23 @@ pub struct WecomAgentConfig {
     pub mcp: Vec<McpServerSpec>,
     #[serde(default)]
     pub system_extra: String,
+}
+
+impl WecomAgentConfig {
+    /// 本轮能否把企微入站图片内联给模型。
+    ///
+    /// 以前只看快照里的 `vision` 布尔值，模型经导入 / 旧库迁移后它可能一直停在 false，
+    /// 于是多模态模型也只收到一行落盘路径（「我无法读取该图片」）。现在按三态现算：
+    /// 手动锁定（text / vision）优先，`auto` / 缺省时由 [`model_capability::effective_vision`]
+    /// 用模型名与厂商兜底，与 DSH 档的 ACP 自动协商对齐。
+    fn accepts_images(&self) -> bool {
+        crate::model_capability::effective_vision(
+            self.vision,
+            self.config.vision_mode.as_deref(),
+            &self.config.provider,
+            &self.config.model,
+        )
+    }
 }
 
 fn default_true() -> bool {
@@ -982,9 +1003,35 @@ impl Orchestrator {
             }
         };
 
-        // 把文字 + 图片/文件附件组装成一条带 vision 块的用户消息
-        let user_msg =
-            build_user_message(&app, &bot, &msg.msgid, &user_text, &msg.media, agent_cfg.vision).await;
+        // 把文字 + 图片/文件附件组装成一条带 vision 块的用户消息。
+        // 是否内联图片按 visionMode 三态现算，不只看模型配置里可能过时的布尔值。
+        let accepts_images = agent_cfg.accepts_images();
+        let user_msg = build_user_message(
+            &app,
+            &bot,
+            &msg.msgid,
+            &user_text,
+            &msg.media,
+            accepts_images,
+        )
+        .await;
+
+        // 排障：下次「看不到图」时一眼区分是判定为否，还是请求/接口失败。
+        if msg.media.iter().any(|m| m.kind == "image") {
+            crate::wecom_log::write(
+                "media-in",
+                &format!(
+                    "msg={} images={} visionMode={} vision={} inline={} model={}/{}",
+                    msg.msgid,
+                    msg.media.iter().filter(|m| m.kind == "image").count(),
+                    agent_cfg.config.vision_mode.as_deref().unwrap_or("auto"),
+                    agent_cfg.vision,
+                    accepts_images,
+                    agent_cfg.config.provider,
+                    agent_cfg.config.model
+                ),
+            );
+        }
 
         // 记录当前回合的出站目标，供 wecom_send_image/file 把媒体发回同一条对话
         {
@@ -1938,6 +1985,8 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
             reply_rules = reply_output_rules()
         );
 
+        // 与组消息门禁同一判定：`vision` 只影响 agent 工具的 Reach（企微默认只读，不放开能力）。
+        let accepts_images = agent_cfg.accepts_images();
         let req = AgentRunRequest {
             config: agent_cfg.config,
             fallback_config: agent_cfg.fallback_config,
@@ -1959,7 +2008,8 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
             apps: Vec::new(),
             permission,
             tools: agent_cfg.tools,
-            vision: agent_cfg.vision,
+            vision: accepts_images,
+            thinking: (!agent_cfg.thinking.trim().is_empty()).then(|| agent_cfg.thinking.trim().to_string()),
             diff_confirm: agent_cfg.diff_confirm,
             always_allow: agent_cfg.always_allow,
             web_allow: agent_cfg.web_allow,
@@ -2826,9 +2876,25 @@ async fn build_user_message(
     let locals = &outcome.locals;
     for local in locals {
         if local.kind == "image" && vision {
+            // 超大图不内联：base64 再胀 1/3，服务端会 400/413，不如明说原因让用户压缩重发。
+            let too_big = tokio::fs::metadata(&local.path)
+                .await
+                .map(|m| m.len() > crate::wecom_media::MAX_INLINE_IMAGE_BYTES)
+                .unwrap_or(false);
+            if too_big {
+                blocks.push(Block::Text {
+                    text: format!(
+                        "（图片「{}」超过 {} MB 内联上限，本轮未发送给模型；请压缩后重发）",
+                        local.filename,
+                        crate::wecom_media::MAX_INLINE_IMAGE_BYTES / (1024 * 1024)
+                    ),
+                });
+                continue;
+            }
             match read_file_base64(&local.path).await {
                 Ok(data) => blocks.push(Block::Image {
-                    media_type: local.media_type.clone(),
+                    media_type: crate::wecom_media::normalize_image_media_type(&local.media_type)
+                        .to_string(),
                     data,
                 }),
                 Err(e) => blocks.push(Block::Text {
@@ -3236,6 +3302,39 @@ fn source_failure_reply(outcome: &crate::wecom_investigation::InvestigationOutco
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn agent_fixture(vision: bool, mode: Option<&str>, provider: &str, model: &str) -> WecomAgentConfig {
+        serde_json::from_value(serde_json::json!({
+            "config": {
+                "id": null,
+                "name": "fixture",
+                "provider": provider,
+                "apiKey": "",
+                "baseUrl": "",
+                "model": model,
+                "temperature": 0.0,
+                "maxTokens": 4096,
+                "isDefault": false,
+                "vision": vision,
+                "visionMode": mode,
+            }
+        }))
+        .expect("fixture agent config")
+    }
+
+    #[test]
+    fn accepts_images_follows_vision_mode_not_stale_flag() {
+        // 本次修复的核心场景：存量 vision=false 但模型确实是多模态，auto 要能翻案。
+        assert!(agent_fixture(false, Some("auto"), "anthropic", "claude-sonnet-4-20250514")
+            .accepts_images());
+        assert!(agent_fixture(false, None, "google", "gemini-2.0-flash").accepts_images());
+        // 手动锁定仍优先：文本档严格不发图，看图档强制内联。
+        assert!(!agent_fixture(true, Some("text"), "openai", "gpt-4o").accepts_images());
+        assert!(agent_fixture(false, Some("vision"), "deepseek", "deepseek-chat").accepts_images());
+        // 纯文本名字 / 未知模型：auto 下保守判否。
+        assert!(!agent_fixture(false, Some("auto"), "deepseek", "deepseek-chat").accepts_images());
+        assert!(!agent_fixture(false, Some("auto"), "custom", "mystery").accepts_images());
+    }
 
     #[tokio::test]
     async fn final_reply_freezes_original_markdown_in_history_and_transport() {

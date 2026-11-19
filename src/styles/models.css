@@ -2379,10 +2379,10 @@
   width: 14px;
   height: 14px;
   margin-top: -5px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--accent);
   border: 2px solid var(--bg-1);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-xs);
 }
 
 .ai-token-slider::-moz-range-track {
@@ -2400,7 +2400,7 @@
 .ai-token-slider::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--accent);
   border: 2px solid var(--bg-1);
 }
@@ -2453,4 +2453,122 @@
 .ai-test-result.error {
   color: var(--red);
 }
+
+/* Context/output settings also render on their own in the budget regression fixture. */
+.ai-budget-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ai-budget-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  align-items: stretch;
+  gap: var(--space-4);
+}
+
+.ai-budget-controls > .input-group {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 3;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-bottom: 0;
+}
+.ai-budget-controls .input-label { flex-wrap: wrap; }
+.ai-budget-controls .ai-preset-control { justify-content: flex-start; min-height: 0; }
+.ai-budget-controls .ai-preset-hint { margin-top: 0; }
+.ai-budget-adjust {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  align-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.ai-budget-track { min-width: 0; }
+.ai-budget-track .ai-token-slider { display: block; margin: 0; min-width: 0; }
+.ai-budget-track .ai-token-slider:disabled { opacity: 0.5; cursor: default; }
+.ai-budget-number { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+
+.ai-budget-restore {
+  align-self: flex-start;
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ai-budget-restore:hover { color: var(--accent-strong); }
+.ai-budget-restore:disabled { opacity: 0.5; cursor: default; }
+.ai-budget-restore:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.ai-budget-preview {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+}
+
+.ai-budget-preview-title { margin-bottom: var(--space-2); color: var(--text-1); font-weight: 600; }
+.ai-budget-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.ai-budget-values > div { min-width: 0; }
+.ai-budget-values dt { color: var(--text-2); font-size: 11px; overflow-wrap: anywhere; }
+.ai-budget-values dd {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: var(--space-1) 0 0;
+  color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ai-budget-source { color: var(--text-3); font-size: 11px; }
+.ai-budget-note, .ai-budget-error, .ai-budget-reasons {
+  margin: var(--space-2) 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ai-budget-note { color: var(--text-2); }
+.ai-budget-note > svg { margin-right: var(--space-1); vertical-align: middle; }
+.ai-budget-error { color: var(--text-1); }
+.ai-budget-error-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--red);
+  font-size: 12px;
+}
+.ai-budget-error-heading > svg { flex-shrink: 0; }
+.ai-budget-error p { margin: var(--space-2) 0 0; }
+.ai-budget-error-hint { color: var(--text-2); }
+.ai-budget-error-action { margin-top: var(--space-3); }
+.ai-budget-error-details { margin-top: var(--space-3); color: var(--text-2); }
+.ai-budget-error-details > summary { width: fit-content; cursor: pointer; }
+.ai-budget-error-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ai-budget-error-details > pre {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ai-budget-reasons { padding-left: var(--space-4); color: var(--yellow); }
 

@@ -150,6 +150,8 @@ pub async fn run_turn(
         permission,
         tools: req.agent.tools,
         vision: req.agent.vision,
+        thinking: (!req.agent.thinking.trim().is_empty())
+            .then(|| req.agent.thinking.trim().to_string()),
         diff_confirm: req.agent.diff_confirm,
         always_allow: req.agent.always_allow,
         web_allow: req.agent.web_allow,
