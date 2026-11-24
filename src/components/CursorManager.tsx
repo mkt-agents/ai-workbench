@@ -329,6 +329,13 @@ function CursorManager() {
     });
   }, []);
 
+  /** 「清理更新标记」的禁用态只看上次 inspect 返回的 running，而关 Cursor 不会
+   *  触发重扫（重扫要量 _bak 目录，太贵）。进程状态刚探到时把这一位同步过去，
+   *  否则关掉 Cursor 后点「刷新」按钮仍是灰的，得切页重挂才解禁。 */
+  const syncUpdateRunning = useCallback((running: boolean) => {
+    setUpdateState((prev) => (prev && prev.running !== running ? { ...prev, running } : prev));
+  }, []);
+
   const refreshLiveStatus = useCallback(
     async (opts?: { silent?: boolean }) => {
       setStatusRefreshing(true);
@@ -374,6 +381,7 @@ function CursorManager() {
         }
         if (runningSettled.status === "fulfilled") {
           setIsCursorRunning(runningSettled.value);
+          syncUpdateRunning(runningSettled.value);
         } else {
           setIsCursorRunning(false);
           if (!opts?.silent) {
@@ -384,7 +392,14 @@ function CursorManager() {
         setStatusRefreshing(false);
       }
     },
-    [invokeGetCursorLoginStatus, invokeIsCursorRunning, syncCursorLoggedInFlags, showMsg, t]
+    [
+      invokeGetCursorLoginStatus,
+      invokeIsCursorRunning,
+      syncCursorLoggedInFlags,
+      syncUpdateRunning,
+      showMsg,
+      t,
+    ]
   );
 
   const refreshDiskUsage = useCallback(async () => {
@@ -516,13 +531,15 @@ function CursorManager() {
     const timer = window.setInterval(async () => {
       if (opLocked) return;
       try {
-        setIsCursorRunning(await invokeIsCursorRunning());
+        const running = await invokeIsCursorRunning();
+        setIsCursorRunning(running);
+        syncUpdateRunning(running);
       } catch {
         /* silent — probing failures must not spam toasts */
       }
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, [invokeIsCursorRunning, opLocked]);
+  }, [invokeIsCursorRunning, opLocked, syncUpdateRunning]);
 
   // Login-completed detection for accounts waiting on initialization: while a
   // pending account exists, poll the live login every 3s while Cursor runs, and
