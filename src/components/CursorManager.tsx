@@ -611,6 +611,8 @@ function CursorManager() {
       warning: t("cursor.cleanupWarning"),
       confirmText: t("cursor.cleanupConfirm"),
       icon: "warning",
+      // Cursor 页的确认框统一 lg，和「清理未完成更新状态」同宽。
+      size: "lg",
     });
     if (!ok) return;
     setCleaning(true);
@@ -635,6 +637,7 @@ function CursorManager() {
       warning: t("cursor.sealedCleanupWarning"),
       confirmText: t("cursor.sealedCleanupConfirm"),
       icon: "warning",
+      size: "lg",
     });
     if (!ok) return;
     setCleaning(true);
@@ -671,6 +674,8 @@ function CursorManager() {
       warning: t("cursor.updateCleanupWarning"),
       confirmText: t("cursor.updateCleanupConfirm"),
       icon: "warning",
+      // 正文要列几条完整绝对路径，sm（400）下折行太碎。
+      size: "lg",
     });
     if (!ok) return;
     setUpdateCleaning(true);
@@ -693,6 +698,7 @@ function CursorManager() {
       warning: t("cursor.slimWarning"),
       confirmText: t("cursor.slimConfirm"),
       icon: "warning",
+      size: "lg",
     });
     if (!ok) return;
     setSlimming(true);
@@ -773,6 +779,7 @@ function CursorManager() {
       warning: t("cursor.deleteWarning"),
       confirmText: t("cursor.deleteConfirm"),
       icon: "danger",
+      size: "lg",
     });
     if (ok) {
       try {
@@ -835,6 +842,7 @@ function CursorManager() {
         warning: t("cursor.addConfirmWarning"),
         confirmText: t("cursor.addConfirmOk"),
         icon: "warning",
+        size: "lg",
       });
       if (!ok) return;
     }
@@ -870,6 +878,7 @@ function CursorManager() {
       warning: t("cursor.finishInitWarning"),
       confirmText: t("cursor.finishLogin"),
       icon: "warning",
+      size: "lg",
     });
     if (!ok) return;
     // The banner's one-click finish may have started while this dialog was
@@ -1015,6 +1024,7 @@ function CursorManager() {
       message: t("cursor.quitMessage"),
       confirmText: t("cursor.quitConfirm"),
       icon: "warning",
+      size: "lg",
     });
     if (!ok) return;
     setBusy(true);
@@ -1045,6 +1055,7 @@ function CursorManager() {
       warning: t("cursor.orphanCleanupWarning"),
       confirmText: t("cursor.orphanCleanupConfirm"),
       icon: "danger",
+      size: "lg",
     });
     if (!ok) return;
     setCleaning(true);
@@ -1109,6 +1120,7 @@ function CursorManager() {
         : t("cursor.switchWarning"),
       confirmText: t("cursor.switch"),
       icon: "warning",
+      size: "lg",
     });
     if (!ok) return;
     // Switching replaces the login any banner match was based on.
@@ -1762,7 +1774,8 @@ function CursorManager() {
 
       {showModal && (
         <div className="modal-overlay">
-          <div className="modal">
+          {/* 与页内确认框同宽（lg），新增 / 编辑账号表单不再比弹框窄一截 */}
+          <div className="modal modal-lg">
             <ModalTitleRow
               title={editingAccount ? t("cursor.editTitle") : t("cursor.addTitle")}
               onClose={() => setShowModal(false)}
