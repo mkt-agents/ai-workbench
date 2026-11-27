@@ -9,7 +9,7 @@
   },
   "status": {
     "idle": "Not started",
-    "running": "Running in background",
+    "running": "Running · Not attached",
     "attached": "In use",
     "launching": "Starting…",
     "polling": "Waiting for its window…",
@@ -19,8 +19,8 @@
     "locating": "Locating its window…"
   },
   "actions": {
-    "start": "Start",
-    "open": "Open",
+    "start": "Start and Attach",
+    "attach": "Attach to Workbench",
     "cancel": "Cancel wait",
     "cancelHint": "Stop waiting; the app keeps running in the background",
     "chooseExe": "Choose app",
@@ -32,8 +32,8 @@
     "more": "More actions"
   },
   "hint": {
-    "idle": "Not started yet. Click “Start” and its window shows up here.",
-    "running": "It is already running in the background. Click “Open” to bring its window here.",
+    "idle": "No window is available to attach. Click “Start and Attach” to open the app.",
+    "running": "The app is running outside Workbench. Click “Attach to Workbench” to bring its window here.",
     "missing": "No executable found. Choose an .exe, or remove it from the list.",
     "error": "Could not bring its window in. Details below; a cold IDE start can take a minute or two.",
     "note": "Leaving this page tucks the window away (the app keeps running). Closing the workbench returns it to the desktop.",
@@ -66,12 +66,12 @@
     "emptyInstalled": "Nothing found. Use “Browse .exe…” below to pick one.",
     "scanFailed": "The scan failed (the system may have refused access). Try “Rescan”, or use “Browse .exe…” below.",
     "runningEmpty": "No app windows are open right now.",
-    "runningHint": "Windows that are open right now and can move into the workbench. Use arrow keys and Enter to open.",
+    "runningHint": "Choose “Attach to Workbench” to bring in a running window.",
     "more": "{{total}} more — type to narrow it down",
     "fileTitle": "Choose an app manually",
-    "fileHint": "Pick an .exe to open, for apps the library could not find.",
+    "fileHint": "Pick an .exe to add the app to the tab bar.",
     "fileButton": "Browse .exe…",
-    "footer": "One click adds it and opens it · ↑↓ to select · Enter to open"
+    "footer": "↑↓ to select · Enter to perform the selected action"
   },
   "error": {
     "title": "Could not bring its window in",
@@ -100,8 +100,8 @@
   "picker": {
     "action": "Pick window",
     "title": "Pick the window to embed — {{name}}",
-    "hint": "This page moves the app's own window in here for you, usually automatically. You only need to point at it here when the automatic choice is wrong — e.g. a splash or helper window got embedded and the real window is still on the desktop.",
-    "rescueHint": "Automatic attach failed. Prefer the window marked Recommended; if the list is empty, open the app from the system tray and refresh.",
+    "hint": "Choose the window to attach. You can also use this list to select the main window if a splash screen or helper window was attached.",
+    "rescueHint": "Could not attach the window. Prefer the window marked Recommended; if the list is empty, open the app from the system tray and refresh.",
     "empty": "No embeddable window found for process “{{process}}”. The app may not be running, or its main window is tucked into the system tray; open it from the tray, then refresh below.",
     "count": "{{count}} windows",
     "adopt": "Embed this window",
@@ -120,7 +120,8 @@
     "split": "Show two apps side by side",
     "single": "Back to a single pane",
     "bEmpty": "Pick an app for this pane",
-    "bNotRunning": "No embeddable window right now. Make it primary, start it there, and its window lands here automatically.",
+    "bNotRunning": "No window is available to attach. Make this app primary to start it.",
+    "bAttachFailed": "Could not attach the window. Try again, or make this app primary to pick a window.",
     "makePrimary": "Make primary",
     "bClear": "Clear this pane"
   },

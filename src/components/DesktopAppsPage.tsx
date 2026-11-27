@@ -300,9 +300,8 @@ export default function DesktopAppsPage() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   /**
    * Slot layout. `single` is today's behavior to the pixel; `split` shows a
-   * second pane beside the primary one. The secondary pane hosts a simpler
-   * lifecycle (attach + heartbeat, no find/resolve/auto-start) — the full one
-   * belongs to whichever app is the active tab.
+   * second pane beside the primary one. Launch and executable resolution
+   * belong to whichever app is the active tab.
    */
   const [splitView, setSplitView] = useState<boolean>(() => loadSplitView());
   /** App parked in the secondary pane ("" = chooser). */
@@ -362,8 +361,8 @@ export default function DesktopAppsPage() {
    * visible pause on every tab switch.
    */
   const hostedRef = useRef<Set<string>>(new Set());
-  /** Set by "add an app": the new tab opens itself once its window is located. */
-  const autoStartRef = useRef<string | null>(null);
+  /** One-shot request from the library or a launch that resolved a new process name. */
+  const pendingAttachRef = useRef<string | null>(null);
   /**
    * Bumped by "取消": a startAndAttach run whose token no longer matches must
    * unwind without touching state — the canceller already reset it. A token
@@ -379,8 +378,8 @@ export default function DesktopAppsPage() {
   const lastActiveHostedRef = useRef("");
   /** Mirror of the secondary slot's process, read at effect start w/o deps. */
   const slotBProcessRef = useRef("");
-  /** Latest `startAndAttach`, reachable from the older per-app effect. */
-  const startRef = useRef<(() => Promise<void>) | null>(null);
+  /** Attach the window to the secondary pane's current layout. */
+  const attachSlotBRef = useRef<(() => Promise<void>) | null>(null);
 
   const slotRef = useRef<HTMLDivElement>(null);
   const slotBRef = useRef<HTMLDivElement>(null);
@@ -490,6 +489,7 @@ export default function DesktopAppsPage() {
   );
   /** The name every embed command matches on: the resolved one wins. */
   const processName = processOverrides[active.id] ?? active.processName;
+  const configuredExePath = loadExePath(active.id) ?? active.exePath;
   activeIdRef.current = activeId;
   processNameRef.current = processName;
 
@@ -635,8 +635,10 @@ export default function DesktopAppsPage() {
 
   /** Switch tabs, snapshotting the outgoing app's phase for a flash-free return. */
   const switchApp = useCallback(
-    (id: string) => {
+    (id: string, attachRequested = false) => {
       if (id === activeIdRef.current) return;
+      pendingAttachRef.current = attachRequested ? id : null;
+      cancelLaunchRef.current += 1;
       setRecentIds(pushRecentAppId(id));
       phaseCacheRef.current.set(activeIdRef.current, phase);
       saveActiveId(id);
@@ -699,20 +701,17 @@ export default function DesktopAppsPage() {
    * secondary pane.
    */
   const slotBAppId = splitView && slotBId && slotBId !== activeId ? slotBId : "";
-  slotBProcessRef.current = (() => {
-    if (!slotBAppId) return "";
-    const app = apps.find((a) => a.id === slotBAppId);
-    return app ? processOverrides[app.id] ?? app.processName : "";
-  })();
+  const slotBApp = apps.find((app) => app.id === slotBAppId);
+  const slotBProcess = slotBApp ? processOverrides[slotBApp.id] ?? slotBApp.processName : "";
+  slotBProcessRef.current = slotBProcess;
 
-  // Secondary pane lifecycle: adopt what is running, follow its slot rect on
-  // the same 400ms heartbeat, hide (never detach) when it goes away. No
-  // find/resolve/auto-start here — that is the primary slot's job.
+  // The secondary pane probes for an existing window and tracks its geometry
+  // once hosted. Only the pane's attach button can take over a new window.
   useEffect(() => {
-    if (!slotBAppId) return;
-    const app = apps.find((a) => a.id === slotBAppId);
-    if (!app) return;
-    const name = processOverrides[app.id] ?? app.processName;
+    if (!slotBProcess) return;
+    const name = slotBProcess;
+    const hostedKey = name.trim().toLowerCase();
+    cancelPendingHostedHide(name);
     let alive = true;
     let attached = false;
     let inFlight = false;
@@ -737,6 +736,12 @@ export default function DesktopAppsPage() {
       pendingRect = null;
       inFlight = true;
       void invokeDesktopEmbedRelayout({ processName: name, ...rect })
+        .then((result) => {
+          if (!alive || result.state !== "lost") return;
+          attached = false;
+          hostedRef.current.delete(hostedKey);
+          setSlotBPhase("idle");
+        })
         .catch(() => undefined)
         .finally(() => {
           inFlight = false;
@@ -753,43 +758,52 @@ export default function DesktopAppsPage() {
       flush();
     };
 
-    setSlotBBusy(true);
-    void (async () => {
-      try {
+    const showHosted = () => {
+      attached = true;
+      hostedRef.current.add(hostedKey);
+      setSlotBPhase("attached");
+      void enqueueShow(name, async () => {
+        if (!alive || anyOverlayOpen()) return;
         const rect = rectOf();
-        const info: DesktopWindowInfo | null = await invokeDesktopEmbedAttach({
-          processName: name,
-          x: rect?.x ?? 0,
-          y: rect?.y ?? 0,
-          width: rect?.width ?? 1,
-          height: rect?.height ?? 1,
-          dpr: rect?.dpr ?? window.devicePixelRatio,
-        }).catch(() => null);
-        if (!alive) {
-          if (info) {
-            void enqueueShow(name, () =>
-              invokeDesktopEmbedShow(name, false).catch(() => undefined)
-            );
-          }
-          return;
+        if (rect && rect.width >= 2 && rect.height >= 2) {
+          await invokeDesktopEmbedRelayout({ processName: name, ...rect }).catch(() => undefined);
         }
-        if (info) {
-          attached = true;
-          setSlotBPhase("attached");
-          // The primary slot's hide-on-switch may have left this entry with
-          // shown=0; a visible pane wants it back (without stealing focus).
-          if (!anyOverlayOpen()) {
-            void enqueueShow(name, () =>
-              invokeDesktopEmbedShow(name, true).catch(() => undefined)
-            );
-          }
-          sync();
-        } else {
-          setSlotBPhase("running");
+        if (alive && !anyOverlayOpen()) {
+          await invokeDesktopEmbedShow(name, true).catch(() => undefined);
         }
+      });
+    };
+
+    attachSlotBRef.current = async () => {
+      const rect = rectOf();
+      if (!alive || !rect || rect.width < 2 || rect.height < 2) return;
+      setSlotBBusy(true);
+      try {
+        await invokeDesktopEmbedAttach({ processName: name, ...rect });
+        if (alive) showHosted();
+        else {
+          void enqueueShow(name, () =>
+            invokeDesktopEmbedShow(name, false).catch(() => undefined)
+          );
+        }
+      } catch {
+        const found = await invokeDesktopEmbedFind(name).catch(() => null);
+        if (alive) setSlotBPhase(found ? "error" : "idle");
       } finally {
         if (alive) setSlotBBusy(false);
       }
+    };
+
+    setSlotBBusy(true);
+    void (async () => {
+      const found = await invokeDesktopEmbedFind(name).catch(() => null);
+      if (!alive) return;
+      if (found?.attached) showHosted();
+      else {
+        hostedRef.current.delete(hostedKey);
+        setSlotBPhase(found ? "running" : "idle");
+      }
+      setSlotBBusy(false);
     })();
 
     const heartbeat = window.setInterval(sync, HEARTBEAT_MS);
@@ -799,10 +813,11 @@ export default function DesktopAppsPage() {
 
     return () => {
       alive = false;
+      attachSlotBRef.current = null;
       window.clearInterval(heartbeat);
       observer.disconnect();
       window.removeEventListener("resize", sync);
-      if (attached) {
+      if (attached && processNameRef.current !== name) {
         void enqueueShow(name, () =>
           invokeDesktopEmbedShow(name, false).catch(() => undefined)
         );
@@ -810,12 +825,11 @@ export default function DesktopAppsPage() {
     };
   }, [
     anyOverlayOpen,
-    apps,
     invokeDesktopEmbedAttach,
+    invokeDesktopEmbedFind,
     invokeDesktopEmbedRelayout,
     invokeDesktopEmbedShow,
-    processOverrides,
-    slotBAppId,
+    slotBProcess,
   ]);
 
   /** Open the picker: the candidates at this moment, adoptable by handle. */
@@ -985,12 +999,14 @@ export default function DesktopAppsPage() {
     async (): Promise<boolean> => {
       const rect = slotRect();
       if (!rect || rect.width < 2 || rect.height < 2) return false;
+      const gen = generationRef.current;
+      const isCurrent = () => aliveRef.current && generationRef.current === gen;
       try {
         const info: DesktopWindowInfo = await invokeDesktopEmbedAttach({
           processName,
           ...rect,
         });
-        if (!aliveRef.current || activeIdRef.current !== active.id) {
+        if (!isCurrent()) {
           // Adopted while the user already left: the effect cleanup for this
           // app has already run, so nothing else would hide this window — it
           // would keep floating over the workbench. Undo the adoption's
@@ -1016,7 +1032,7 @@ export default function DesktopAppsPage() {
         }
         return true;
       } catch (err) {
-        if (aliveRef.current && activeIdRef.current === active.id) {
+        if (isCurrent()) {
           attachedRef.current = false;
           setErrorText(err instanceof Error ? err.message : String(err));
         }
@@ -1034,8 +1050,23 @@ export default function DesktopAppsPage() {
     ]
   );
 
-  // Per-app lifecycle: adopt what is already running, follow the slot on resize,
-  // and hide (never detach) when the page goes away.
+  const reattach = useCallback(async () => {
+    const gen = generationRef.current;
+    setBusy(true);
+    try {
+      if (await attach()) return;
+      const found = await invokeDesktopEmbedFind(processName).catch(() => null);
+      if (aliveRef.current && generationRef.current === gen && activeIdRef.current === active.id) {
+        if (!found) setErrorText("");
+        setPhase(found ? "error" : "idle");
+      }
+    } finally {
+      if (aliveRef.current && generationRef.current === gen) setBusy(false);
+    }
+  }, [active.id, attach, invokeDesktopEmbedFind, processName]);
+
+  // Probe the active app and restore windows already hosted by the workbench.
+  // An external window stays independent until the user requests an attach.
   useEffect(() => {
     // `aliveRef` alone cannot tell one app's effect from the next: the new
     // effect flips it back to true while the old app's async work is still in
@@ -1222,24 +1253,6 @@ export default function DesktopAppsPage() {
       });
     };
 
-    /**
-     * "Add an app" means "open it": only that explicit path auto-starts. The
-     * page itself still never launches anything behind the user's back.
-     * Consumed on every settle path — including "no window found", which is the
-     * normal answer for an installed app that is not running yet.
-     */
-    const maybeAutoStart = () => {
-      if (autoStartRef.current !== active.id) return;
-      autoStartRef.current = null;
-      // Deferred past this effect's `finally`: otherwise `busy` would flip back
-      // to false while the launch we just triggered is still running.
-      window.setTimeout(() => {
-        if (aliveRef.current && activeIdRef.current === active.id) {
-          void startRef.current?.();
-        }
-      }, 0);
-    };
-
     // Optimistic path: a window we already host can go back on screen before
     // `find` answers. The call below still runs and corrects us either way.
     const hostedKey = processName.trim().toLowerCase();
@@ -1256,11 +1269,6 @@ export default function DesktopAppsPage() {
           })
           .catch(() => undefined);
       }
-    } else {
-      // No incoming window: the slot will show the placeholder, so the
-      // outgoing window must leave now instead of waiting for a show that
-      // would never come (the placeholder would stay covered behind it).
-      flushPendingHostedHides();
     }
 
     void (async () => {
@@ -1277,10 +1285,9 @@ export default function DesktopAppsPage() {
           // actually owns a window for the launch path: a launcher hands the
           // window to a differently named binary, and without this the app
           // never embeds no matter how often it is started.
-          const exe = loadExePath(active.id) ?? active.exePath ?? null;
-          if (exe) setLocating(true);
-          const resolved = exe
-            ? await invokeDesktopEmbedProcessForExe(exe).catch(() => null)
+          if (configuredExePath) setLocating(true);
+          const resolved = configuredExePath
+            ? await invokeDesktopEmbedProcessForExe(configuredExePath).catch(() => null)
             : null;
           if (!isCurrent()) return;
           setLocating(false);
@@ -1291,13 +1298,15 @@ export default function DesktopAppsPage() {
             // The effect re-runs with the resolved name and finds the window.
             return;
           }
+          if (pendingAttachRef.current === active.id) pendingAttachRef.current = null;
+          flushPendingHostedHides();
           setPhase("idle");
-          maybeAutoStart();
           return;
         }
+        const attachRequested = pendingAttachRef.current === active.id;
+        if (attachRequested) pendingAttachRef.current = null;
         if (found.attached) {
           hostedRef.current.add(hostedKey);
-          autoStartRef.current = null;
           attachedRef.current = true;
           lastActiveHostedRef.current = processName;
           setWindowTitle(found.title);
@@ -1316,17 +1325,12 @@ export default function DesktopAppsPage() {
           }
           return;
         }
-        const ok = await attach();
-        if (!isCurrent()) return;
-        if (ok) {
-          hostedRef.current.add(hostedKey);
-          autoStartRef.current = null;
-          return;
-        }
-        // Not running yet is the normal case here: stay quiet about it.
+        hostedRef.current.delete(hostedKey);
+        attachedRef.current = false;
+        // The placeholder has no incoming native show to flush the old window.
+        flushPendingHostedHides();
         setPhase("running");
-        setErrorText("");
-        maybeAutoStart();
+        if (attachRequested) await reattach();
       } finally {
         if (isCurrent()) setBusy(false);
       }
@@ -1362,6 +1366,7 @@ export default function DesktopAppsPage() {
         // already shown the window — hiding here would tuck away a live
         // pane (and the heartbeat would keep it hidden, shown=0).
         if (aliveRef.current && activeIdRef.current === previousActiveId) return;
+        if (aliveRef.current && slotBProcessRef.current === processToHide) return;
         if (generationRef.current === genAtCleanup && aliveRef.current) return;
         void enqueueShow(processToHide, () =>
           invokeDesktopEmbedShow(processToHide, false).catch(() => undefined)
@@ -1392,13 +1397,14 @@ export default function DesktopAppsPage() {
   }, [
     active.id,
     anyOverlayOpen,
-    attach,
+    configuredExePath,
     invokeDesktopEmbedFind,
     invokeDesktopEmbedFocus,
     invokeDesktopEmbedProcessForExe,
     invokeDesktopEmbedShow,
     invokeDesktopEmbedRelayout,
     processName,
+    reattach,
     slotRect,
   ]);
 
@@ -1496,6 +1502,7 @@ export default function DesktopAppsPage() {
         setLocating(false);
         const real = resolved?.trim() ?? "";
         if (real && real.toLowerCase() !== processName.trim().toLowerCase()) {
+          pendingAttachRef.current = active.id;
           saveProcessName(active.id, real);
           setProcessOverrides((prev) => ({ ...prev, [active.id]: real }));
           return true;
@@ -1631,10 +1638,6 @@ export default function DesktopAppsPage() {
     t,
   ]);
 
-  // The per-app effect is declared above, so it reaches this through a ref:
-  // that is how "add an app" opens the thing the user just added.
-  startRef.current = startAndAttach;
-
   /**
    * Open the app library; the hosted window must step aside while it is up.
    * The hide is fired, not awaited: the queue may still be settling a previous
@@ -1707,20 +1710,6 @@ export default function DesktopAppsPage() {
     })();
   }, [invokeScanInstalledApps]);
 
-  const reattach = useCallback(async () => {
-    const gen = generationRef.current;
-    setBusy(true);
-    try {
-      if (await attach()) return;
-      const found = await invokeDesktopEmbedFind(processName).catch(() => null);
-      if (aliveRef.current && generationRef.current === gen && activeIdRef.current === active.id) {
-        setPhase(found ? "error" : "idle");
-      }
-    } finally {
-      if (aliveRef.current && generationRef.current === gen) setBusy(false);
-    }
-  }, [active.id, attach, invokeDesktopEmbedFind, processName]);
-
   const detach = useCallback(async () => {
     setBusy(true);
     setPhase("closing");
@@ -1732,6 +1721,7 @@ export default function DesktopAppsPage() {
     try {
       await invokeDesktopEmbedDetach(processName);
       hostedRef.current.delete(processName.trim().toLowerCase());
+      if (lastActiveHostedRef.current === processName) lastActiveHostedRef.current = "";
       if (activeIdRef.current === active.id) {
         attachedRef.current = false;
         setPhase("running");
@@ -1870,57 +1860,37 @@ export default function DesktopAppsPage() {
     t,
   ]);
 
-  /**
-   * Put an app in the bar and open it. Shared by all three library sources, so
-   * "add" always means the same thing: one click, then the app is on screen.
-   */
-  const adoptApp = useCallback(
-    (def: DesktopAppDef) => {
+  /** Add or select a library app. Only the running list requests a new attach. */
+  const selectLibraryApp = useCallback(
+    (def: DesktopAppDef, attachRequested = false) => {
       const key = def.processName.trim().toLowerCase();
-      const existing = apps.find((app) => app.processName.trim().toLowerCase() === key);
+      const existing = apps.find((app) =>
+        [app.processName, processOverrides[app.id]].some(
+          (name) => name?.trim().toLowerCase() === key
+        )
+      );
       const target = existing ?? def;
-      /** What we knew about this app before the click — reused for the first frame. */
-      const cached = phaseCacheRef.current.get(target.id);
       if (!existing) {
         const next = dedupeApps([...custom, def]);
         setCustom(next);
         saveCustomApps(next);
         phaseCacheRef.current.delete(target.id);
       }
-      setRecentIds(pushRecentAppId(target.id));
-
-      // The library closes without a visibility sync: a tab switch (or an
-      // immediate start) follows, and the per-app effect manages visibility
-      // for whichever process ends up hosted.
-      overlaysRef.current.library = false;
-      cancelOverlaySync();
-      setLibraryOpen(false);
-      setWarning("");
-      setErrorText("");
 
       if (target.id === activeIdRef.current) {
-        // Already the current tab: nothing switches, so open it right here.
-        autoStartRef.current = null;
-        // The library just hid this app's window (shown=0), and attach_wait
-        // reuses an existing entry with its shown flag — without this the
-        // slot would go permanently blank.
-        if (!anyOverlayOpen()) {
-          const restoreName = processOverrides[target.id] ?? target.processName;
-          void enqueueShow(restoreName, () =>
-            invokeDesktopEmbedShow(restoreName, true).catch(() => undefined)
-          );
-        }
-        void startRef.current?.();
+        setRecentIds(pushRecentAppId(target.id));
+        closeLibrary();
+        if (attachRequested && !attachedRef.current) void reattach();
         return;
       }
 
-      autoStartRef.current = target.id;
-      phaseCacheRef.current.set(activeIdRef.current, phase);
-      saveActiveId(target.id);
-      setActiveId(target.id);
-      setPhase(cached ?? "idle");
+      // The switch effect handles visibility for the incoming tab.
+      overlaysRef.current.library = false;
+      cancelOverlaySync();
+      setLibraryOpen(false);
+      switchApp(target.id, attachRequested);
     },
-    [anyOverlayOpen, apps, custom, invokeDesktopEmbedShow, phase, processOverrides]
+    [apps, cancelOverlaySync, closeLibrary, custom, processOverrides, reattach, switchApp]
   );
 
   /**
@@ -1947,16 +1917,12 @@ export default function DesktopAppsPage() {
           setCustom(next);
           saveCustomApps(next);
         }
-        overlaysRef.current.library = false;
-        cancelOverlaySync();
-        setLibraryOpen(false);
-        setPhase("idle");
-        autoStartRef.current = null;
-        void startRef.current?.();
+        closeLibrary();
+        if (activeIdRef.current === target.id) setPhase("idle");
         return;
       }
 
-      adoptApp({
+      selectLibraryApp({
         id: appIdForProcess(stem),
         label: stem,
         processName: stem,
@@ -1965,7 +1931,7 @@ export default function DesktopAppsPage() {
         custom: true,
       });
     },
-    [adoptApp, apps, custom]
+    [apps, closeLibrary, custom, selectLibraryApp]
   );
 
   const removeApp = useCallback(async () => {
@@ -2001,6 +1967,7 @@ export default function DesktopAppsPage() {
     setCustom(next);
     saveCustomApps(next);
     phaseCacheRef.current.delete(active.id);
+    pendingAttachRef.current = null;
     saveActiveId(BUILTIN_DESKTOP_APPS[0].id);
     setActiveId(BUILTIN_DESKTOP_APPS[0].id);
   }, [
@@ -2045,6 +2012,7 @@ export default function DesktopAppsPage() {
    */
   const cancelLaunch = useCallback(() => {
     cancelLaunchRef.current += 1;
+    pendingAttachRef.current = null;
     if (aliveRef.current && activeIdRef.current === active.id) {
       setPhase("idle");
       setErrorText("");
@@ -2125,8 +2093,8 @@ export default function DesktopAppsPage() {
         };
       case "running":
         return {
-          key: "open",
-          label: t("actions.open"),
+          key: "attach",
+          label: t("actions.attach"),
           icon: <Play size={13} />,
           variant: "primary",
           disabled: busy,
@@ -2205,11 +2173,11 @@ export default function DesktopAppsPage() {
 
   /**
    * Secondary pane overlay: a chooser when nothing is parked there, else the
-   * parked app's status ("attach pending" / not running) with a swap shortcut.
+   * parked app's status with an attach action and a swap shortcut.
    * Nothing renders while its window is actually attached.
    */
   const slotBPanel = (() => {
-    const appB = apps.find((a) => a.id === slotBAppId) ?? null;
+    const appB = slotBApp;
     if (appB && slotBPhase === "attached") return null;
     return (
       <div className="dapps-hint is-idle">
@@ -2223,9 +2191,25 @@ export default function DesktopAppsPage() {
             <div className="dapps-hint-body">
               <p className="dapps-hint-title">{label(appB)}</p>
               <p className="dapps-hint-text">
-                {slotBBusy ? t("hint.starting") : t("slot.bNotRunning")}
+                {slotBBusy
+                  ? t("status.locating")
+                  : slotBPhase === "error"
+                    ? t("slot.bAttachFailed")
+                    : slotBPhase === "running"
+                      ? t("hint.running")
+                      : t("slot.bNotRunning")}
               </p>
               <div className="dapps-hint-actions">
+                {slotBPhase === "running" || slotBPhase === "error" ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-small"
+                    disabled={slotBBusy}
+                    onClick={() => void attachSlotBRef.current?.()}
+                  >
+                    {t("actions.attach")}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="btn btn-secondary btn-small"
@@ -2521,7 +2505,7 @@ export default function DesktopAppsPage() {
                     onClick={() => void reattach()}
                   >
                     <RefreshCw size={12} />
-                    {t("actions.open")}
+                    {t("actions.attach")}
                   </button>
                 ) : null}
                 <button
@@ -2567,7 +2551,7 @@ export default function DesktopAppsPage() {
                     onClick={() => void reattach()}
                   >
                     <RefreshCw size={12} />
-                    {t("actions.open")}
+                    {t("actions.attach")}
                   </button>
                 </div>
               </div>
@@ -2730,22 +2714,13 @@ export default function DesktopAppsPage() {
           onRefreshRunning={() => void running.refresh()}
           onRescanInstalled={() => void rescanInstalled()}
           onNeedFullScan={ensureFullScan}
-          onPickInstalled={(info) => adoptApp(appFromInstalled(info))}
-          onPickRunning={(item) => adoptApp(appFromRunningApp(item))}
+          onPickInstalled={(info) => selectLibraryApp(appFromInstalled(info))}
+          onPickRunning={(item, attachRequested) =>
+            selectLibraryApp(appFromRunningApp(item), attachRequested)
+          }
+          isHosted={(name) => hostedRef.current.has(name.trim().toLowerCase())}
           onPickFile={() => void addAppFromFile()}
-          onSwitch={(app) => {
-            setRecentIds(pushRecentAppId(app.id));
-            // Picking the app we are already on still has to restore its window:
-            // opening the library hid it.
-            if (app.id === activeIdRef.current) {
-              closeLibrary();
-              return;
-            }
-            overlaysRef.current.library = false;
-            cancelOverlaySync();
-            setLibraryOpen(false);
-            switchApp(app.id);
-          }}
+          onSwitch={selectLibraryApp}
           onClose={closeLibrary}
         />
       ) : null}

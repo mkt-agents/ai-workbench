@@ -38,10 +38,11 @@ export interface AppLibraryDialogProps {
   onRescanInstalled: () => void;
   /** User toggled “all programs” or typed a query that needs the full pool. */
   onNeedFullScan: () => void;
-  /** Add a scanned app (and open it). */
+  /** Add a scanned app to the tab bar. */
   onPickInstalled: (info: InstalledAppInfo) => void;
-  /** Add a running window's app (and open it). */
-  onPickRunning: (running: DesktopRunningApp) => void;
+  /** Select a running app and attach its window on explicit request. */
+  onPickRunning: (running: DesktopRunningApp, attachRequested: boolean) => void;
+  isHosted: (processName: string) => boolean;
   /** Fall back to the file picker. */
   onPickFile: () => void;
   /** The app is already in the bar: focus it instead of duplicating it. */
@@ -130,6 +131,7 @@ export default function AppLibraryDialog({
   onNeedFullScan,
   onPickInstalled,
   onPickRunning,
+  isHosted,
   onPickFile,
   onSwitch,
   onClose,
@@ -196,12 +198,6 @@ export default function AppLibraryDialog({
     else onPickInstalled(info);
   };
 
-  const addRunning = (item: DesktopRunningApp) => {
-    const found = existing(item.processName);
-    if (found) onSwitch(found);
-    else onPickRunning(item);
-  };
-
   const shownTiles = installedRows.slice(0, MAX_TILES);
   const hiddenTiles = installedRows.length - shownTiles.length;
 
@@ -246,7 +242,7 @@ export default function AppLibraryDialog({
 
   const activate = (item: Selectable) => {
     if (item.kind === "app") onSwitch(item.app);
-    else if (item.kind === "running") addRunning(item.item);
+    else if (item.kind === "running") onPickRunning(item.item, !isHosted(item.item.processName));
     else addInstalled(item.info);
   };
 
@@ -402,7 +398,7 @@ export default function AppLibraryDialog({
                     {runningRows.map((item) => {
                       const key = `run:${item.processName}-${item.pid}`;
                       const index = selectableIndex(key);
-                      const added = hasProcess(apps, item.processName);
+                      const hosted = isHosted(item.processName);
                       return (
                         <li key={key}>
                           <button
@@ -412,7 +408,7 @@ export default function AppLibraryDialog({
                               index === activeIndex ? " is-active" : ""
                             }`}
                             onMouseEnter={() => setActiveIndex(index)}
-                            onClick={() => addRunning(item)}
+                            onClick={() => onPickRunning(item, !hosted)}
                           >
                             <IconTile path={item.exePath} size={26} />
                             <span className="dapps-lib-row-main">
@@ -425,9 +421,9 @@ export default function AppLibraryDialog({
                               </span>
                             </span>
                             <span
-                              className={`dapps-lib-row-action${added ? " is-added" : ""}`}
+                              className={`dapps-lib-row-action${hosted ? " is-added" : ""}`}
                             >
-                              {added ? t("library.switch") : t("library.add")}
+                              {hosted ? t("library.switch") : t("actions.attach")}
                             </span>
                           </button>
                         </li>
