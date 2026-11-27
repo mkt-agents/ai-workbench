@@ -285,7 +285,6 @@ export interface Invocations {
   invokeDesktopEmbedShow: (processName: string, visible: boolean) => Promise<void>;
   invokeDesktopEmbedFocus: (processName: string) => Promise<void>;
   invokeDesktopEmbedSetVeilBgr: (bgr: number) => Promise<void>;
-  invokeDesktopEmbedReactivate: (processName: string) => Promise<void>;
   invokeDesktopEmbedRestore: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetach: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetachAll: () => Promise<void>;
@@ -708,8 +707,6 @@ export const invocations: Invocations = {
     tauriInvoke<void>('desktop_embed_focus', { processName }),
   invokeDesktopEmbedSetVeilBgr: (bgr: number) =>
     tauriInvoke<void>('desktop_embed_set_veil_bgr', { bgr }),
-  invokeDesktopEmbedReactivate: (processName: string) =>
-    tauriInvoke<void>('desktop_embed_reactivate', { processName }),
   invokeDesktopEmbedRestore: (processName: string) =>
     tauriInvoke<void>('desktop_embed_restore', { processName }),
   invokeDesktopEmbedDetach: (processName: string) =>

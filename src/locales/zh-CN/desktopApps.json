@@ -119,11 +119,16 @@
   "slot": {
     "split": "并排显示两个应用",
     "single": "切回单屏显示",
-    "bEmpty": "选择一个应用放到这个槽位",
-    "bNotRunning": "当前没有可接入的窗口。切换为主槽后可以启动应用。",
-    "bAttachFailed": "未能接入窗口。可以重试，或切换为主槽后手动选窗口。",
-    "makePrimary": "切换为主槽",
-    "bClear": "清空这个槽位"
+    "left": "左槽",
+    "right": "右槽",
+    "empty": "未选择应用",
+    "choose": "选择应用",
+    "change": "更换应用",
+    "focus": "操作 {{app}}",
+    "swap": "对调左右槽位",
+    "clear": "清空此槽",
+    "libraryTitle": "{{pane}} · 应用库",
+    "bAttachFailed": "未能接入窗口。可以重试，或点击槽位标题后手动选窗口。"
   },
   "storage": {
     "warn": "设置未能保存（存储空间不足或被禁用），重启后会丢失"

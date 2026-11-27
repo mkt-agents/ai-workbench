@@ -18,6 +18,7 @@ import { cachedAppIcon, loadAppIcon, warmAppIcon } from "../../lib/appIcons";
 const MAX_TILES = 120;
 
 export interface AppLibraryDialogProps {
+  title?: string;
   /** Apps already in the bar — shown with an "added" badge, click = switch. */
   apps: DesktopAppDef[];
   /** Recently used app ids (newest first) — resolved against `apps`. */
@@ -117,6 +118,7 @@ type Selectable =
  * Arrow keys + Enter pick from a flat selectable list without leaving search.
  */
 export default function AppLibraryDialog({
+  title,
   apps,
   recentIds,
   installed,
@@ -276,10 +278,10 @@ export default function AppLibraryDialog({
         className="modal dapps-lib"
         role="dialog"
         aria-modal="true"
-        aria-label={t("library.title")}
+        aria-label={title ?? t("library.title")}
         onClick={(event) => event.stopPropagation()}
       >
-        <ModalTitleRow title={t("library.title")} onClose={onClose} />
+        <ModalTitleRow title={title ?? t("library.title")} onClose={onClose} />
 
         <div className="dapps-lib-body">
           <div className="dapps-lib-main">

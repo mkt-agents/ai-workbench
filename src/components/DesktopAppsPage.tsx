@@ -9,10 +9,10 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AlertTriangle,
   AppWindow,
+  ArrowLeftRight,
   Columns2,
   FolderSearch,
   Loader2,
@@ -46,6 +46,7 @@ import {
   dedupeApps,
   floatBarVeilBgr,
   loadActiveId,
+  loadActivePaneSide,
   loadCustomApps,
   loadExePath,
   loadInstalledAllCache,
@@ -60,6 +61,7 @@ import {
   processNameFromExe,
   pushRecentAppId,
   saveActiveId,
+  saveActivePaneSide,
   saveCustomApps,
   saveExePath,
   saveInstalledAllCache,
@@ -69,6 +71,7 @@ import {
   saveSplitView,
   saveTabOrder,
   type DesktopAppDef,
+  type DesktopPaneSide,
 } from "../lib/desktopApps";
 import { cachedAppIcon, loadAppIcon, warmAppIcon } from "../lib/appIcons";
 
@@ -81,6 +84,9 @@ type Phase =
   | "closing"
   | "missing"
   | "error";
+
+type PaneTarget = "active" | "other";
+type PaneAction = "attach" | "start";
 
 /** Logical slot rect + devicePixelRatio, as sent to the embed backend. */
 type SlotRect = { x: number; y: number; width: number; height: number; dpr: number };
@@ -249,7 +255,6 @@ export default function DesktopAppsPage() {
   const invokeDesktopEmbedShow = useGlobalStore((s) => s.invokeDesktopEmbedShow);
   const invokeDesktopEmbedFocus = useGlobalStore((s) => s.invokeDesktopEmbedFocus);
   const invokeDesktopEmbedSetVeilBgr = useGlobalStore((s) => s.invokeDesktopEmbedSetVeilBgr);
-  const invokeDesktopEmbedReactivate = useGlobalStore((s) => s.invokeDesktopEmbedReactivate);
   const invokeDesktopEmbedRestore = useGlobalStore((s) => s.invokeDesktopEmbedRestore);
   const invokeDesktopEmbedDetach = useGlobalStore((s) => s.invokeDesktopEmbedDetach);
   const invokeDesktopEmbedCandidates = useGlobalStore((s) => s.invokeDesktopEmbedCandidates);
@@ -297,14 +302,17 @@ export default function DesktopAppsPage() {
   const [processOverrides, setProcessOverrides] = useState<Record<string, string>>(() =>
     loadProcessNames()
   );
-  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryTarget, setLibraryTarget] = useState<PaneTarget | null>(null);
+  const libraryOpen = libraryTarget !== null;
   /**
    * Slot layout. `single` is today's behavior to the pixel; `split` shows a
    * second pane beside the primary one. Launch and executable resolution
    * belong to whichever app is the active tab.
    */
   const [splitView, setSplitView] = useState<boolean>(() => loadSplitView());
-  /** App parked in the secondary pane ("" = chooser). */
+  const [activeSide, setActiveSide] = useState(loadActivePaneSide);
+  const otherSide: DesktopPaneSide = activeSide === "left" ? "right" : "left";
+  /** App parked in the inactive pane ("" = chooser), independent of its side. */
   const [slotBId, setSlotBId] = useState<string>(() => loadSlotBId());
   const [slotBPhase, setSlotBPhase] = useState<Phase>("idle");
   const [slotBBusy, setSlotBBusy] = useState(false);
@@ -361,8 +369,9 @@ export default function DesktopAppsPage() {
    * visible pause on every tab switch.
    */
   const hostedRef = useRef<Set<string>>(new Set());
-  /** One-shot request from the library or a launch that resolved a new process name. */
-  const pendingAttachRef = useRef<string | null>(null);
+  /** Explicit attach or launch request to finish after activating a pane. */
+  const pendingPaneActionRef = useRef<{ id: string; action: PaneAction } | null>(null);
+  const startAndAttachRef = useRef<(() => Promise<void>) | null>(null);
   /**
    * Bumped by "取消": a startAndAttach run whose token no longer matches must
    * unwind without touching state — the canceller already reset it. A token
@@ -383,6 +392,7 @@ export default function DesktopAppsPage() {
 
   const slotRef = useRef<HTMLDivElement>(null);
   const slotBRef = useRef<HTMLDivElement>(null);
+  const paneSyncRef = useRef<{ active?: () => void; other?: () => void }>({});
   const storageWarnTimer = useRef(0);
   const attachedRef = useRef(false);
   const aliveRef = useRef(true);
@@ -423,20 +433,17 @@ export default function DesktopAppsPage() {
     []
   );
 
-  /**
-   * Flip one overlay's flag and recompute the hosted window's visibility from
-   * the whole set — one enqueued hide on open, one enqueued show+focus on the
-   * transition back to "nothing open". This replaces the three (then five)
-   * ad-hoc hide/show pairs whose interleaving used to produce the
-   * disappear→reappear→flash-again dance around every dialog.
-   *
-   * Transitions are coalesced through a 0ms timer: closing the ⋯ menu and
-   * opening the picker happen back-to-back in one click, and enqueueing both
-   * would order a show-then-hide (or hide-then-show) race — the window could
-   * flash over the picker. Only the FINAL flag set runs an operation; the
-   * promise resolves once that operation settles (or immediately when the
-   * flags were overwritten by a direct write + `cancelOverlaySync`).
-   */
+  const syncOtherVisibility = useCallback(() => {
+    const process = slotBProcessRef.current;
+    if (!process || !hostedRef.current.has(process.trim().toLowerCase())) return;
+    return enqueueShow(process, async () => {
+      if (slotBProcessRef.current === process) {
+        await invokeDesktopEmbedShow(process, !anyOverlayOpen()).catch(() => undefined);
+      }
+    });
+  }, [anyOverlayOpen, invokeDesktopEmbedShow]);
+
+  /** Coalesce overlay transitions so both native windows stay behind the dialogs. */
   const setOverlay = useCallback(
     (key: "library" | "picker" | "menu" | "confirm", open: boolean): Promise<void> => {
       overlaysRef.current[key] = open;
@@ -444,22 +451,22 @@ export default function DesktopAppsPage() {
       return new Promise<void>((resolve) => {
         overlaySyncTimerRef.current = window.setTimeout(() => {
           const anyOpen = anyOverlayOpen();
-          if (!attachedRef.current) {
-            resolve();
-            return;
+          const primary = processNameRef.current;
+          const visibility = [syncOtherVisibility()];
+          if (attachedRef.current) {
+            visibility.push(enqueueShow(primary, () =>
+              invokeDesktopEmbedShow(primary, !anyOpen).catch(() => undefined)
+            ));
           }
-          const process = processNameRef.current;
-          void enqueueShow(process, () =>
-            invokeDesktopEmbedShow(process, !anyOpen)
-              .then(() => {
-                if (!anyOpen) return invokeDesktopEmbedFocus(process);
-              })
-              .catch(() => undefined)
-          ).then(resolve, resolve);
+          void Promise.all(visibility).then(async () => {
+            if (!anyOverlayOpen() && attachedRef.current && processNameRef.current === primary) {
+              await invokeDesktopEmbedFocus(primary).catch(() => undefined);
+            }
+          }).then(resolve, resolve);
         }, 0);
       });
     },
-    [anyOverlayOpen, invokeDesktopEmbedFocus, invokeDesktopEmbedShow]
+    [anyOverlayOpen, invokeDesktopEmbedFocus, invokeDesktopEmbedShow, syncOtherVisibility]
   );
 
   /**
@@ -633,31 +640,34 @@ export default function DesktopAppsPage() {
     [invokeDesktopEmbedRelayout, slotRect]
   );
 
-  /** Switch tabs, snapshotting the outgoing app's phase for a flash-free return. */
+  const flipActiveSide = useCallback(() => {
+    setActiveSide(otherSide);
+    saveActivePaneSide(otherSide);
+  }, [otherSide]);
+
+  /** Give an app the full controls of the active pane while preserving its on-screen side. */
   const switchApp = useCallback(
-    (id: string, attachRequested = false) => {
-      if (id === activeIdRef.current) return;
-      pendingAttachRef.current = attachRequested ? id : null;
+    (id: string, options: { target?: PaneTarget; action?: PaneAction; clearPrevious?: boolean } = {}) => {
+      const previous = activeIdRef.current;
+      if (id === previous) return;
+      pendingPaneActionRef.current = options.action ? { id, action: options.action } : null;
       cancelLaunchRef.current += 1;
       setRecentIds(pushRecentAppId(id));
-      phaseCacheRef.current.set(activeIdRef.current, phase);
-      saveActiveId(id);
-      // In split view, clicking the secondary pane's tab swaps the panes: the
-      // clicked app moves to the primary slot, where the full lifecycle
-      // (find / resolve / heartbeat) lives, and the old primary parks in the
-      // secondary one.
-      if (splitView && id === slotBId) {
-        const previous = activeIdRef.current;
-        setSlotBId(previous);
-        saveSlotBId(previous);
-        setSlotBPhase(phaseCacheRef.current.get(previous) === "attached" ? "attached" : "idle");
+      phaseCacheRef.current.set(previous, phase);
+      if (id === slotBId || (splitView && options.target === "other")) {
+        const nextOther = options.clearPrevious ? "" : previous;
+        setSlotBId(nextOther);
+        saveSlotBId(nextOther);
+        setSlotBPhase(nextOther && phase === "attached" ? "attached" : "idle");
+        flipActiveSide();
       }
+      saveActiveId(id);
       setActiveId(id);
       setPhase(phaseCacheRef.current.get(id) ?? "idle");
       setWarning("");
       setErrorText("");
     },
-    [phase, slotBId, splitView]
+    [flipActiveSide, phase, slotBId, splitView]
   );
 
   /**
@@ -708,7 +718,10 @@ export default function DesktopAppsPage() {
   // The secondary pane probes for an existing window and tracks its geometry
   // once hosted. Only the pane's attach button can take over a new window.
   useEffect(() => {
-    if (!slotBProcess) return;
+    if (!slotBProcess) {
+      setSlotBBusy(false);
+      return;
+    }
     const name = slotBProcess;
     const hostedKey = name.trim().toLowerCase();
     cancelPendingHostedHide(name);
@@ -757,6 +770,8 @@ export default function DesktopAppsPage() {
       pendingRect = rect;
       flush();
     };
+
+    paneSyncRef.current.other = sync;
 
     const showHosted = () => {
       attached = true;
@@ -814,6 +829,7 @@ export default function DesktopAppsPage() {
     return () => {
       alive = false;
       attachSlotBRef.current = null;
+      paneSyncRef.current.other = undefined;
       window.clearInterval(heartbeat);
       observer.disconnect();
       window.removeEventListener("resize", sync);
@@ -1241,13 +1257,12 @@ export default function DesktopAppsPage() {
       }
       shownThisRun = true;
       void enqueueShow(processName, async () => {
+        if (!isCurrent() || anyOverlayOpen()) return;
         const rect = slotRect();
         if (rect && rect.width >= 2 && rect.height >= 2) {
           await invokeDesktopEmbedRelayout({ processName, ...rect }).catch(() => undefined);
         }
-        // The entry may be gone (the app recreated its window between the
-        // optimistic show and here): a rejection must not escape into the
-        // queue chain as an unhandled rejection.
+        if (!isCurrent() || anyOverlayOpen()) return;
         await invokeDesktopEmbedShow(processName, true).catch(() => undefined);
         await invokeDesktopEmbedFocus(processName).catch(() => undefined);
       });
@@ -1298,13 +1313,18 @@ export default function DesktopAppsPage() {
             // The effect re-runs with the resolved name and finds the window.
             return;
           }
-          if (pendingAttachRef.current === active.id) pendingAttachRef.current = null;
+          const pending = pendingPaneActionRef.current;
+          if (pending?.id === active.id) pendingPaneActionRef.current = null;
           flushPendingHostedHides();
           setPhase("idle");
+          if (pending?.id === active.id && pending.action === "start") {
+            await startAndAttachRef.current?.();
+          }
           return;
         }
-        const attachRequested = pendingAttachRef.current === active.id;
-        if (attachRequested) pendingAttachRef.current = null;
+        const action = pendingPaneActionRef.current?.id === active.id
+          ? pendingPaneActionRef.current.action : undefined;
+        if (action) pendingPaneActionRef.current = null;
         if (found.attached) {
           hostedRef.current.add(hostedKey);
           attachedRef.current = true;
@@ -1330,12 +1350,13 @@ export default function DesktopAppsPage() {
         // The placeholder has no incoming native show to flush the old window.
         flushPendingHostedHides();
         setPhase("running");
-        if (attachRequested) await reattach();
+        if (action) await reattach();
       } finally {
         if (isCurrent()) setBusy(false);
       }
     })();
 
+    paneSyncRef.current.active = sync;
     const observer = new ResizeObserver(sync);
     if (slotRef.current) observer.observe(slotRef.current);
     window.addEventListener("resize", sync);
@@ -1350,6 +1371,7 @@ export default function DesktopAppsPage() {
 
     return () => {
       aliveRef.current = false;
+      paneSyncRef.current.active = undefined;
       window.clearTimeout(settleTimer);
       pendingRect = null;
       window.clearInterval(heartbeat);
@@ -1422,43 +1444,6 @@ export default function DesktopAppsPage() {
   // Re-activate the hosted window whenever the workbench regains the
   // foreground, so an image paste (and typing) works without switching tabs.
   //
-  // The embedded window is a cross-process WS_CHILD whose input queue is
-  // attached to the host thread; Win32 focus is per-queue, and Chromium's own
-  // document-active / page-visibility state is separate again. When the user
-  // leaves the workbench (企微 screenshot, a browser, the AI Hub window, …)
-  // and comes back, the child regains HWND keyboard focus, but the hosted
-  // Chromium document does NOT re-activate on its own — and the ASYNC
-  // clipboard path an image Ctrl+V uses is gated on `document.hasFocus()`, so
-  // the image paste is silently dropped (a plain text paste has a lower bar
-  // and sometimes slips through). Switching tabs "fixes" it only because the
-  // window really goes hidden on another tab and Chromium processes
-  // WasHidden→WasShown, which re-activates the document. `desktop_embed_reactivate`
-  // reproduces that occlusion deterministically (hide → one pump turn → show),
-  // and is a no-op unless the host is foreground and the window is shown, so it
-  // is safe to fire on every foreground gain.
-  //
-  // This onFocusChanged path is the fast path when activation goes through the
-  // Tauri chrome. Clicking straight into the foreign child often skips it —
-  // reliable fallback is `relayout`'s host_was_background detection in
-  // desktop_embed.rs (same reactivate, debounced so the two do not double-blink).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let dead = false;
-    void getCurrentWindow()
-      .onFocusChanged(({ payload: focused }) => {
-        if (!focused || !attachedRef.current) return;
-        void invokeDesktopEmbedReactivate(processNameRef.current).catch(() => undefined);
-      })
-      .then((fn) => {
-        if (dead) fn();
-        else unlisten = fn;
-      });
-    return () => {
-      dead = true;
-      unlisten?.();
-    };
-  }, [invokeDesktopEmbedReactivate]);
-
   const startAndAttach = useCallback(async () => {
     setBusy(true);
     setErrorText("");
@@ -1502,7 +1487,7 @@ export default function DesktopAppsPage() {
         setLocating(false);
         const real = resolved?.trim() ?? "";
         if (real && real.toLowerCase() !== processName.trim().toLowerCase()) {
-          pendingAttachRef.current = active.id;
+          pendingPaneActionRef.current = { id: active.id, action: "attach" };
           saveProcessName(active.id, real);
           setProcessOverrides((prev) => ({ ...prev, [active.id]: real }));
           return true;
@@ -1574,18 +1559,6 @@ export default function DesktopAppsPage() {
             void setOverlay("library", overlaysRef.current.library);
           }
           nudgeGeometry(active.id, processName);
-          // A launch-embed adopts while the app is still starting up: its
-          // input pipeline can miss the first WM_SETFOCUS entirely (the
-          // backend's refocus campaign covers ~1.6s, but a cold Electron
-          // start can take longer). Re-fire the focus command twice; it
-          // no-ops unless the workbench is the foreground window.
-          for (const delay of [400, 1200]) {
-            window.setTimeout(() => {
-              if (aliveRef.current && activeIdRef.current === active.id && attachedRef.current) {
-                void invokeDesktopEmbedFocus(processName).catch(() => undefined);
-              }
-            }, delay);
-          }
           return;
         }
         if (!launchAttempted) {
@@ -1638,22 +1611,24 @@ export default function DesktopAppsPage() {
     t,
   ]);
 
+  startAndAttachRef.current = startAndAttach;
+
   /**
-   * Open the app library; the hosted window must step aside while it is up.
+   * Open the app library; the hosted windows must step aside while it is up.
    * The hide is fired, not awaited: the queue may still be settling a previous
    * show, and the dialog can appear a frame later without being covered.
    */
-  const openLibrary = useCallback(() => {
+  const openLibrary = useCallback((target: PaneTarget = "active") => {
     // Flip the flag before anything async: an attach that lands between this
     // click and the next render must already know the dialog is coming.
     overlaysRef.current.library = true;
-    setLibraryOpen(true);
+    setLibraryTarget(target);
     void setOverlay("library", true);
     void running.refresh();
   }, [running, setOverlay]);
 
   const closeLibrary = useCallback(() => {
-    setLibraryOpen(false);
+    setLibraryTarget(null);
     void setOverlay("library", false);
   }, [setOverlay]);
 
@@ -1795,9 +1770,9 @@ export default function DesktopAppsPage() {
       void setOverlay("confirm", false);
       return;
     }
-    // Proceeding: the window must stay hidden for the whole kill; drop the
-    // flag WITHOUT a visibility sync — the kill flow manages it from here.
+    // Keep the closing window hidden while restoring the other pane.
     overlaysRef.current.confirm = false;
+    void syncOtherVisibility();
     setBusy(true);
     setPhase("closing");
     try {
@@ -1857,6 +1832,8 @@ export default function DesktopAppsPage() {
     invokeKillApp,
     label,
     processName,
+    setOverlay,
+    syncOtherVisibility,
     t,
   ]);
 
@@ -1887,10 +1864,15 @@ export default function DesktopAppsPage() {
       // The switch effect handles visibility for the incoming tab.
       overlaysRef.current.library = false;
       cancelOverlaySync();
-      setLibraryOpen(false);
-      switchApp(target.id, attachRequested);
+      setLibraryTarget(null);
+      if (libraryTarget !== "other" && target.id !== slotBId) void syncOtherVisibility();
+      switchApp(target.id, {
+        target: libraryTarget ?? "active",
+        action: attachRequested ? "attach" : undefined,
+      });
     },
-    [apps, cancelOverlaySync, closeLibrary, custom, processOverrides, reattach, switchApp]
+    [apps, cancelOverlaySync, closeLibrary, custom, libraryTarget, processOverrides,
+      reattach, slotBId, switchApp, syncOtherVisibility]
   );
 
   /**
@@ -1966,8 +1948,13 @@ export default function DesktopAppsPage() {
     const next = custom.filter((app) => app.id !== active.id);
     setCustom(next);
     saveCustomApps(next);
+    if (slotBApp) {
+      switchApp(slotBApp.id, { clearPrevious: true });
+      phaseCacheRef.current.delete(active.id);
+      return;
+    }
     phaseCacheRef.current.delete(active.id);
-    pendingAttachRef.current = null;
+    pendingPaneActionRef.current = null;
     saveActiveId(BUILTIN_DESKTOP_APPS[0].id);
     setActiveId(BUILTIN_DESKTOP_APPS[0].id);
   }, [
@@ -1978,6 +1965,9 @@ export default function DesktopAppsPage() {
     invokeDesktopEmbedShow,
     label,
     processName,
+    setOverlay,
+    slotBApp,
+    switchApp,
     t,
   ]);
 
@@ -2012,7 +2002,7 @@ export default function DesktopAppsPage() {
    */
   const cancelLaunch = useCallback(() => {
     cancelLaunchRef.current += 1;
-    pendingAttachRef.current = null;
+    pendingPaneActionRef.current = null;
     if (aliveRef.current && activeIdRef.current === active.id) {
       setPhase("idle");
       setErrorText("");
@@ -2171,95 +2161,154 @@ export default function DesktopAppsPage() {
       : []),
   ];
 
-  /**
-   * Secondary pane overlay: a chooser when nothing is parked there, else the
-   * parked app's status with an attach action and a swap shortcut.
-   * Nothing renders while its window is actually attached.
-   */
-  const slotBPanel = (() => {
-    const appB = slotBApp;
-    if (appB && slotBPhase === "attached") return null;
+  const paneTransition = phase === "launching" || phase === "polling" || phase === "closing";
+  const layoutBusy = busy || slotBBusy || paneTransition;
+  const appActions = (
+    <>
+      {primaryAction && (!splitView || paneTransition || phase === "attached") ? (
+        <button
+          type="button"
+          data-action={primaryAction.key}
+          className={`btn btn-${primaryAction.variant} btn-small dapps-primary`}
+          disabled={primaryAction.disabled}
+          title={primaryAction.title ?? primaryAction.label}
+          onClick={primaryAction.onClick}
+        >
+          {primaryAction.icon}
+          <span className="dapps-primary-label">{primaryAction.label}</span>
+        </button>
+      ) : null}
+      <DropdownMenu
+        label={t("actions.more")}
+        triggerClassName="btn btn-secondary btn-small"
+        onOpenChange={setOverflowOpen}
+        items={menuActions.map((a) => ({
+          label: a.label,
+          icon: a.icon,
+          danger: a.variant === "danger",
+          disabled: a.disabled,
+          onClick: a.onClick,
+        }))}
+      >
+        <MoreHorizontal size={13} />
+      </DropdownMenu>
+    </>
+  );
+
+  const renderPaneHeader = (target: PaneTarget) => {
+    const isActive = target === "active";
+    const side = isActive ? activeSide : otherSide;
+    const app = isActive ? active : slotBApp;
+    const panePhase = isActive ? phase : slotBPhase;
+    const appName = app ? label(app) : t("slot.empty");
+    const state = isActive ? statusText : t(slotBBusy ? "status.locating" : `status.${panePhase}`);
+    const chooseLabel = t(app ? "slot.change" : "slot.choose");
     return (
-      <div className="dapps-hint is-idle">
-        {appB ? (
-          <>
-            <div className="dapps-idle-hero" aria-hidden="true">
-              <div className="dapps-idle-icon">
-                <AppTabIcon app={appB} installed={installed} />
-              </div>
-            </div>
-            <div className="dapps-hint-body">
-              <p className="dapps-hint-title">{label(appB)}</p>
-              <p className="dapps-hint-text">
-                {slotBBusy
-                  ? t("status.locating")
-                  : slotBPhase === "error"
-                    ? t("slot.bAttachFailed")
-                    : slotBPhase === "running"
-                      ? t("hint.running")
-                      : t("slot.bNotRunning")}
-              </p>
-              <div className="dapps-hint-actions">
-                {slotBPhase === "running" || slotBPhase === "error" ? (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-small"
-                    disabled={slotBBusy}
-                    onClick={() => void attachSlotBRef.current?.()}
-                  >
-                    {t("actions.attach")}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-small"
-                  onClick={() => switchApp(appB.id)}
-                >
-                  {t("slot.makePrimary")}
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="dapps-hint-title">{t("slot.bEmpty")}</p>
-            <div className="dapps-slot-b-choices">
-              {apps
-                .filter((a) => a.id !== active.id)
-                .slice(0, 8)
-                .map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={() => {
-                      setSlotBId(a.id);
-                      saveSlotBId(a.id);
-                      setSlotBPhase("idle");
-                    }}
-                  >
-                    <AppTabIcon app={a} installed={installed} />
-                    {label(a)}
-                  </button>
-                ))}
-            </div>
-          </>
-        )}
-        {slotBId ? (
+      <div className="dapps-pane-header">
+        <span className="dapps-pane-side">{t(`slot.${side}`)}</span>
+        {app ? (
           <button
             type="button"
-            className="dapps-slot-b-close"
-            title={t("slot.bClear")}
-            onClick={() => {
-              setSlotBId("");
-              saveSlotBId("");
-              setSlotBPhase("idle");
-              setSlotBBusy(false);
-            }}
+            className="dapps-pane-select"
+            aria-pressed={isActive}
+            disabled={!isActive && layoutBusy}
+            title={t("slot.focus", { app: appName })}
+            onClick={() => switchApp(app.id)}
           >
-            <XCircle size={13} />
+            <AppTabIcon app={app} installed={installed} />
+            <span className="dapps-pane-name">{appName}</span>
+            <span className={`dapps-status is-${panePhase}`} title={state}>
+              <span className="dapps-dot" />
+              <span className="dapps-pane-status">{state}</span>
+            </span>
           </button>
-        ) : null}
+        ) : (
+          <span className="dapps-pane-name is-empty">{appName}</span>
+        )}
+        <div className="dapps-pane-actions">
+          <button
+            type="button"
+            className="btn btn-secondary btn-small dapps-pane-icon-button"
+            disabled={layoutBusy}
+            aria-label={chooseLabel}
+            title={chooseLabel}
+            onClick={() => void openLibrary(target)}
+          >
+            {app ? <FolderSearch size={13} /> : <Plus size={14} />}
+          </button>
+          {app && (!isActive || slotBApp) ? (
+            <button
+              type="button"
+              className="btn btn-secondary btn-small dapps-pane-icon-button"
+              disabled={layoutBusy}
+              aria-label={t("slot.clear")}
+              title={t("slot.clear")}
+              onClick={() => {
+                if (isActive && slotBApp) switchApp(slotBApp.id, { clearPrevious: true });
+                else {
+                  setSlotBId("");
+                  saveSlotBId("");
+                  setSlotBPhase("idle");
+                }
+              }}
+            >
+              <XCircle size={13} />
+            </button>
+          ) : null}
+          {isActive ? appActions : null}
+        </div>
+      </div>
+    );
+  };
+
+  const slotBPanel = (() => {
+    const app = slotBApp;
+    if (app && slotBPhase === "attached") return null;
+    if (!app) {
+      return (
+        <div className="dapps-hint is-idle">
+          <div className="dapps-hint-actions">
+            <button
+              type="button"
+              className="btn btn-secondary dapps-hint-primary"
+              disabled={layoutBusy}
+              onClick={() => void openLibrary("other")}
+            >
+              <Plus size={14} />
+              {t("slot.choose")}
+            </button>
+          </div>
+        </div>
+      );
+    }
+    const canAttach = slotBPhase === "running" || slotBPhase === "error";
+    return (
+      <div className="dapps-hint is-idle">
+        <div className="dapps-idle-hero" aria-hidden="true">
+          <div className="dapps-idle-icon">
+            <AppTabIcon app={app} installed={installed} />
+          </div>
+        </div>
+        <div className="dapps-hint-body">
+          <p className="dapps-hint-title">{label(app)}</p>
+          <p className="dapps-hint-text">
+            {slotBBusy ? t("status.locating") : slotBPhase === "error" ? t("slot.bAttachFailed")
+              : canAttach ? t("hint.running") : t("hint.idle")}
+          </p>
+          <div className="dapps-hint-actions">
+            <button
+              type="button"
+              className="btn btn-primary dapps-hint-primary"
+              disabled={layoutBusy}
+              onClick={() => canAttach
+                ? void attachSlotBRef.current?.()
+                : switchApp(app.id, { action: "start" })}
+            >
+              <Play size={13} />
+              {t(canAttach ? "actions.attach" : "actions.start")}
+            </button>
+          </div>
+        </div>
       </div>
     );
   })();
@@ -2313,6 +2362,7 @@ export default function DesktopAppsPage() {
                   setDragTabId(null);
                   if (dragged) reorderTabs(dragged, app.id);
                 }}
+                disabled={layoutBusy}
                 onClick={() => switchApp(app.id)}
               >
                 <AppTabIcon app={app} installed={installed} />
@@ -2329,6 +2379,7 @@ export default function DesktopAppsPage() {
             type="button"
             className="dapps-tab dapps-tab-add"
             title={t("library.title")}
+            disabled={layoutBusy}
             onClick={() => void openLibrary()}
           >
             <Plus size={14} />
@@ -2336,7 +2387,7 @@ export default function DesktopAppsPage() {
           </button>
         </div>
 
-        <span
+        {!splitView ? <span
           className={`dapps-status is-${phase}`}
           title={
             phase === "attached" && windowTitle
@@ -2351,7 +2402,7 @@ export default function DesktopAppsPage() {
             <span className="dapps-dot" />
           )}
           <span className="dapps-status-text">{statusText}</span>
-        </span>
+        </span> : null}
 
         {phase === "attached" && warning ? (
           <span className="dapps-warn">
@@ -2403,6 +2454,7 @@ export default function DesktopAppsPage() {
             className={`btn btn-secondary btn-small dapps-split-btn${splitView ? " is-on" : ""}`}
             title={splitView ? t("slot.single") : t("slot.split")}
             aria-pressed={splitView}
+            disabled={layoutBusy}
             onClick={() => {
               const next = !splitView;
               setSplitView(next);
@@ -2411,39 +2463,32 @@ export default function DesktopAppsPage() {
           >
             <Columns2 size={13} />
           </button>
-          {primaryAction ? (
+          {splitView ? (
             <button
               type="button"
-              data-action={primaryAction.key}
-              className={`btn btn-${primaryAction.variant} btn-small dapps-primary`}
-              disabled={primaryAction.disabled}
-              title={primaryAction.title ?? primaryAction.label}
-              onClick={primaryAction.onClick}
+              className="btn btn-secondary btn-small dapps-pane-icon-button"
+              disabled={!slotBApp || layoutBusy}
+              aria-label={t("slot.swap")}
+              title={t("slot.swap")}
+              onClick={() => {
+                flipActiveSide();
+                window.requestAnimationFrame(() => {
+                  paneSyncRef.current.active?.();
+                  paneSyncRef.current.other?.();
+                });
+              }}
             >
-              {primaryAction.icon}
-              <span className="dapps-primary-label">{primaryAction.label}</span>
+              <ArrowLeftRight size={14} />
             </button>
-          ) : null}
-          <DropdownMenu
-            label={t("actions.more")}
-            triggerClassName="btn btn-secondary btn-small"
-            onOpenChange={setOverflowOpen}
-            items={menuActions.map((a) => ({
-              label: a.label,
-              icon: a.icon,
-              danger: a.variant === "danger",
-              disabled: a.disabled,
-              onClick: a.onClick,
-            }))}
-          >
-            <MoreHorizontal size={13} />
-          </DropdownMenu>
+          ) : appActions}
         </div>
       </div>
 
       <div className="dapps-body">
-        <div className={`dapps-slot-area${splitView ? " is-split" : ""}`}>
-          <div className="dapps-slot-wrap">
+        <div className={`dapps-slot-area${splitView ? ` is-split active-${activeSide}` : ""}`}>
+          <section className="dapps-slot-wrap is-active-pane">
+            {splitView ? renderPaneHeader("active") : null}
+          <div className="dapps-slot-content">
             <div className="dapps-slot" ref={slotRef} />
             {phase !== "attached" && (
           phase === "launching" || phase === "polling" || phase === "closing" ? (
@@ -2508,15 +2553,17 @@ export default function DesktopAppsPage() {
                     {t("actions.attach")}
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className="dapps-hint-link"
-                  onClick={() => void openLibrary()}
-                >
-                  {t("hint.pickAnother")}
-                </button>
+                {!splitView ? (
+                  <button
+                    type="button"
+                    className="dapps-hint-link"
+                    onClick={() => void openLibrary()}
+                  >
+                    {t("hint.pickAnother")}
+                  </button>
+                ) : null}
               </div>
-              <p className="dapps-hint-note">{t("hint.note")}</p>
+              {!splitView ? <p className="dapps-hint-note">{t("hint.note")}</p> : null}
             </div>
 
             {/* Failure detail lives here when the rescue picker was closed.
@@ -2560,11 +2607,15 @@ export default function DesktopAppsPage() {
           )
         )}
           </div>
+          </section>
           {splitView ? (
-            <div className="dapps-slot-wrap">
-              <div className="dapps-slot" ref={slotBRef} />
-              {slotBPanel}
-            </div>
+            <section className="dapps-slot-wrap">
+              {renderPaneHeader("other")}
+              <div className="dapps-slot-content">
+                <div className="dapps-slot" ref={slotBRef} />
+                {slotBPanel}
+              </div>
+            </section>
           ) : null}
         </div>
       </div>
@@ -2700,8 +2751,11 @@ export default function DesktopAppsPage() {
         </div>
       ) : null}
 
-      {libraryOpen ? (
+      {libraryTarget ? (
         <AppLibraryDialog
+          title={splitView ? t("slot.libraryTitle", {
+            pane: t(libraryTarget === "active" ? `slot.${activeSide}` : `slot.${otherSide}`),
+          }) : undefined}
           apps={apps}
           recentIds={recentIds}
           installed={installedShortcuts}

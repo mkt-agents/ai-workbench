@@ -99,12 +99,15 @@ mod imp {
     use super::{
         DesktopRelayoutResult, DesktopRunningApp, DesktopWindowCandidate, DesktopWindowInfo,
     };
+    use std::cell::Cell;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
     use tauri::Manager;
     use windows::core::{BOOL, PWSTR};
     use windows::Win32::Foundation::{
-        CloseHandle, GetLastError, SetLastError, ERROR_SUCCESS, HWND, LPARAM, POINT, RECT,
+        CloseHandle, GetLastError, SetLastError, ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, RECT,
+        WPARAM,
     };
     use windows::Win32::Graphics::Gdi::{
         ClientToScreen, RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
@@ -114,20 +117,26 @@ mod imp {
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetFocus, keybd_event, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP, VK_MENU,
+        keybd_event, GetAsyncKeyState, GetFocus, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP,
+        VK_LBUTTON, VK_MENU,
+    };
+    use windows::Win32::UI::Shell::{
+        DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetParent, GetWindow,
-        GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextW,
-        GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-        SetForegroundWindow, SetParent, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-        ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP,
+        EnumWindows, GetClassNameW, GetClientRect, GetCursorPos, GetForegroundWindow,
+        GetGUIThreadInfo, GetParent, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
+        GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsChild, IsHungAppWindow,
+        IsIconic, IsWindow, IsWindowVisible, IsZoomed, KillTimer, SetForegroundWindow, SetParent,
+        SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, WindowFromPoint,
+        GUITHREADINFO, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP,
         SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
         SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE,
-        SW_SHOWNA, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_LONG_PTR_INDEX,
-        WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-        WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
-        WS_THICKFRAME, WS_VISIBLE,
+        SW_SHOWNA, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WA_INACTIVE, WINDOWPLACEMENT,
+        WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_LBUTTONDOWN, WM_NCDESTROY, WM_PARENTNOTIFY,
+        WM_TIMER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED,
+        WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP,
+        WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
     };
 
     /// Below this (physical px²) a window is a helper, not an application frame.
@@ -277,14 +286,11 @@ mod imp {
     /// is logged once instead of every 400ms heartbeat. Diagnostic only.
     static LAST_WARN: Mutex<Option<(isize, &'static str)>> = Mutex::new(None);
 
-    /// Last successful `reactivate` start per process. Frontend
-    /// `onFocusChanged` and the relayout heartbeat can both request a
-    /// document re-activation on the same return-from-background; without a
-    /// debounce the 48ms hide flickers twice in a row. Keyed by process so
-    /// split-view slots do not suppress each other.
+    /// Coalesce reactivation requests from successive relayout ticks.
     static LAST_REACTIVATE_AT: Mutex<Option<HashMap<String, std::time::Instant>>> =
         Mutex::new(None);
     const REACTIVATE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+    static FOCUS_EPOCH: AtomicU64 = AtomicU64::new(0);
 
     /// Kept for the existing IPC; the solid Win32 veil was removed after it
     /// could stick on top of the hosted window and leave a permanent black
@@ -300,6 +306,7 @@ mod imp {
     fn note_host_foreground(
         host_fg: bool,
         shown: bool,
+        owns_focus: bool,
         host_was_background: &mut bool,
     ) -> bool {
         if !shown {
@@ -309,7 +316,7 @@ mod imp {
             *host_was_background = true;
             return false;
         }
-        *host_was_background
+        owns_focus && *host_was_background
     }
 
     #[cfg(test)]
@@ -319,27 +326,49 @@ mod imp {
         #[test]
         fn background_then_return_requests_reactivate_once() {
             let mut sticky = false;
-            assert!(!note_host_foreground(false, true, &mut sticky));
+            assert!(!note_host_foreground(false, true, false, &mut sticky));
             assert!(sticky);
-            assert!(note_host_foreground(true, true, &mut sticky));
+            assert!(note_host_foreground(true, true, true, &mut sticky));
             // Caller clears sticky after scheduling reactivate; simulate that.
             sticky = false;
-            assert!(!note_host_foreground(true, true, &mut sticky));
+            assert!(!note_host_foreground(true, true, true, &mut sticky));
+        }
+
+        #[test]
+        fn foreground_return_only_reactivates_the_focused_slot() {
+            let mut left_background = false;
+            let mut right_background = false;
+            assert!(!note_host_foreground(
+                false,
+                true,
+                false,
+                &mut left_background
+            ));
+            assert!(!note_host_foreground(
+                false,
+                true,
+                false,
+                &mut right_background
+            ));
+
+            let right = note_host_foreground(true, true, false, &mut right_background);
+            let left = note_host_foreground(true, true, true, &mut left_background);
+            assert_eq!((left, right), (true, false));
         }
 
         #[test]
         fn hidden_entry_never_requests_reactivate() {
             let mut sticky = false;
-            assert!(!note_host_foreground(false, false, &mut sticky));
+            assert!(!note_host_foreground(false, false, false, &mut sticky));
             assert!(!sticky);
             sticky = true;
-            assert!(!note_host_foreground(true, false, &mut sticky));
+            assert!(!note_host_foreground(true, false, true, &mut sticky));
         }
 
         #[test]
         fn stay_foreground_without_prior_background_is_quiet() {
             let mut sticky = false;
-            assert!(!note_host_foreground(true, true, &mut sticky));
+            assert!(!note_host_foreground(true, true, true, &mut sticky));
             assert!(!sticky);
         }
     }
@@ -1412,6 +1441,135 @@ mod imp {
         alive
     }
 
+    fn contains_focus(hwnd: HWND, focused: HWND) -> bool {
+        !focused.is_invalid() && (hwnd == focused || unsafe { IsChild(hwnd, focused).as_bool() })
+    }
+
+    fn foreground_focus(parent: HWND) -> Option<HWND> {
+        if unsafe { GetForegroundWindow() } != parent {
+            return None;
+        }
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetGUIThreadInfo(0, &mut info) }.ok()?;
+        Some(info.hwndFocus)
+    }
+
+    const PANE_FOCUS_SUBCLASS: usize = 1;
+
+    fn clear_background_focus(parent: HWND) {
+        with_map(|entries| {
+            for entry in entries
+                .values_mut()
+                .filter(|entry| entry.parent == parent.0 as isize)
+            {
+                entry.host_was_background = false;
+            }
+        });
+    }
+
+    fn focus_clicked_pane(parent: HWND, point: POINT) {
+        let Some(focused) = foreground_focus(parent) else {
+            return;
+        };
+        clear_background_focus(parent);
+        let hit = unsafe { WindowFromPoint(point) };
+        let pane = with_map(|entries| {
+            entries
+                .values()
+                .find(|entry| {
+                    entry.parent == parent.0 as isize
+                        && entry.shown != 0
+                        && contains_focus(as_hwnd(entry.hwnd), hit)
+                })
+                .map(|entry| (entry.hwnd, entry.pid, entry.attached_thread))
+        });
+        let Some((raw, pid, child_thread)) = pane else {
+            return;
+        };
+        let hwnd = as_hwnd(raw);
+        if contains_focus(hwnd, focused) || !entry_live(raw, pid) {
+            return;
+        }
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() || IsHungAppWindow(hwnd).as_bool() {
+                return;
+            }
+            // Keep the original click and the renderer's selected editor
+            // intact. A hide/show here can blur the input immediately after
+            // the click made it active.
+            let _ = ensure_queue_shared(parent, hwnd, child_thread);
+            let _ = SetFocus(Some(hwnd));
+        }
+    }
+
+    unsafe extern "system" fn pane_focus_proc(
+        parent: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        subclass: usize,
+        data: usize,
+    ) -> LRESULT {
+        let click = &*(data as *const Cell<Option<POINT>>);
+        if msg == WM_NCDESTROY {
+            let _ = KillTimer(Some(parent), data);
+            let _ = RemoveWindowSubclass(parent, Some(pane_focus_proc), subclass);
+            drop(Box::from_raw(data as *mut Cell<Option<POINT>>));
+        } else if msg == WM_ACTIVATE && wparam.0 as u16 as u32 == WA_INACTIVE {
+            FOCUS_EPOCH.fetch_add(1, Ordering::Relaxed);
+            click.set(None);
+            let _ = KillTimer(Some(parent), data);
+        } else if msg == WM_LBUTTONDOWN
+            || (msg == WM_PARENTNOTIFY && wparam.0 as u16 as u32 == WM_LBUTTONDOWN)
+        {
+            // WM_PARENTNOTIFY reaches the native host for clicks the Tauri
+            // WebView never sees. Cancel older keyboard-only recovery before
+            // the foreign app processes this click.
+            FOCUS_EPOCH.fetch_add(1, Ordering::Relaxed);
+            if GetForegroundWindow() == parent {
+                clear_background_focus(parent);
+            }
+            let mut point = POINT::default();
+            if GetCursorPos(&mut point).is_ok() {
+                click.set(Some(point));
+                let _ = SetTimer(Some(parent), data, 10, None);
+            }
+        } else if msg == WM_TIMER && wparam.0 == data {
+            if GetAsyncKeyState(i32::from(VK_LBUTTON.0)) >= 0 {
+                let _ = KillTimer(Some(parent), data);
+                if let Some(point) = click.take() {
+                    focus_clicked_pane(parent, point);
+                }
+            }
+            return LRESULT(0);
+        }
+        DefSubclassProc(parent, msg, wparam, lparam)
+    }
+
+    fn watch_pane_clicks(parent: HWND) {
+        unsafe {
+            if GetWindowSubclass(parent, Some(pane_focus_proc), PANE_FOCUS_SUBCLASS, None).as_bool()
+            {
+                return;
+            }
+            let click = Box::into_raw(Box::new(Cell::new(None::<POINT>)));
+            if !SetWindowSubclass(
+                parent,
+                Some(pane_focus_proc),
+                PANE_FOCUS_SUBCLASS,
+                click as usize,
+            )
+            .as_bool()
+            {
+                drop(Box::from_raw(click));
+                debug_log("could not watch embedded pane clicks");
+            }
+        }
+    }
+
     /// Re-send `WM_SETFOCUS` to the hosted window.
     ///
     /// `SetFocus` alone can be a no-op from the app's point of view: the
@@ -1431,7 +1589,7 @@ mod imp {
             // Already holding focus: the cycle below is pure flicker — hide,
             // show, no state changed. That was the double blink on every tab
             // switch (show → focus cycle → the page's second show → cycle).
-            if GetFocus() == hwnd {
+            if contains_focus(hwnd, GetFocus()) {
                 return true;
             }
             // Flicker-free path: with the input queues shared (the steady
@@ -1441,7 +1599,7 @@ mod imp {
             // show cycle when it did not (busy app, attach still failing).
             if attached {
                 let _ = SetFocus(Some(hwnd));
-                if GetFocus() == hwnd {
+                if contains_focus(hwnd, GetFocus()) {
                     return true;
                 }
             }
@@ -1456,7 +1614,7 @@ mod imp {
             );
             let _ = SetFocus(Some(hwnd));
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            !attached || GetFocus() == hwnd
+            contains_focus(hwnd, GetFocus())
         }
     }
 
@@ -1555,19 +1713,19 @@ mod imp {
         let _ = app.run_on_main_thread(move || unsafe {
             let parent = as_hwnd(parent_raw);
             let hwnd = as_hwnd(hwnd_raw);
+            watch_pane_clicks(parent);
             if IsIconic(hwnd).as_bool() {
                 return;
             }
             let fg_before = GetForegroundWindow();
             let raised = raise_host(parent);
-            let attached = ensure_queue_shared(parent, hwnd, child_thread);
-            let _ = SetFocus(Some(hwnd));
-            let nudged = sync_hosted_focus(hwnd, attached);
+            let nudged = contains_focus(hwnd, GetFocus())
+                || sync_hosted_focus(hwnd, ensure_queue_shared(parent, hwnd, child_thread));
             debug_log(&format!(
-                "focus 0x{:X} fg_before=0x{:X} raised={raised} attached={attached} focused={} nudged={nudged}",
+                "focus 0x{:X} fg_before=0x{:X} raised={raised} focused={} nudged={nudged}",
                 hwnd.0 as usize,
                 fg_before.0 as usize,
-                GetFocus() == hwnd
+                contains_focus(hwnd, GetFocus())
             ));
         });
     }
@@ -1583,11 +1741,15 @@ mod imp {
         let app = app.clone();
         let parent_raw = parent.0 as isize;
         let hwnd_raw = hwnd.0 as isize;
+        let focus_epoch = FOCUS_EPOCH.load(Ordering::Relaxed);
         std::thread::spawn(move || {
             let mut elapsed = 0u64;
             for at in [300u64, 800, 1600] {
                 std::thread::sleep(std::time::Duration::from_millis(at - elapsed));
                 elapsed = at;
+                if FOCUS_EPOCH.load(Ordering::Relaxed) != focus_epoch {
+                    return;
+                }
                 // Queue attach retry runs on this background thread: it does
                 // not need the UI thread, and it must happen even while the
                 // user is elsewhere (the guards below would skip the round).
@@ -1596,7 +1758,8 @@ mod imp {
                 let _ = app.run_on_main_thread(move || unsafe {
                     let parent = as_hwnd(parent_raw);
                     let hwnd = as_hwnd(hwnd_raw);
-                    if IsIconic(hwnd).as_bool()
+                    if FOCUS_EPOCH.load(Ordering::Relaxed) != focus_epoch
+                        || IsIconic(hwnd).as_bool()
                         || IsHungAppWindow(hwnd).as_bool()
                         // The page may have hidden the window meanwhile
                         // (picker open): nudging would show it again.
@@ -2455,13 +2618,10 @@ mod imp {
             }
         }
 
-        // Host left another app (Ctrl+C/V, Alt-Tab, …) and came back by
-        // clicking the hosted surface: HWND focus can land without Chromium
-        // flipping document-active. Tauri's onFocusChanged often misses that
-        // path because activation went through the foreign child. Track the
-        // background stretch here on the 400ms heartbeat and force the same
-        // hide→show reactivate the tab switch uses.
-        let host_fg = unsafe { GetForegroundWindow() } == parent;
+        // On keyboard return from another app, only the pane that already
+        // owns keyboard focus may refresh its embedded document.
+        let focused = foreground_focus(parent);
+        let owns_focus = focused.is_some_and(|focused| contains_focus(window, focused));
         let should_reactivate = with_map(|m| {
             let Some(entry) = m.get_mut(&key) else {
                 return false;
@@ -2472,7 +2632,12 @@ mod imp {
                 entry.host_was_background = false;
                 return false;
             }
-            note_host_foreground(host_fg, entry.shown != 0, &mut entry.host_was_background)
+            note_host_foreground(
+                focused.is_some(),
+                entry.shown != 0,
+                owns_focus,
+                &mut entry.host_was_background,
+            )
         });
         if should_reactivate {
             reactivate(app, process);
@@ -2514,27 +2679,9 @@ mod imp {
             } else {
                 SWP_HIDEWINDOW
             };
-        let child_thread =
-            with_map(|m| m.get(&key).map(|e| e.attached_thread)).unwrap_or(0);
+        // Restoring visibility for a second pane must not take keyboard focus.
         unsafe {
-            let hosted = as_hwnd(hwnd);
-            let _ = SetWindowPos(hosted, None, 0, 0, 0, 0, flags);
-            // A window cannot keep its focus once it is hidden: hiding it moves
-            // focus to the parent, so showing it again leaves the app with no
-            // focused element and it drops every keystroke until a click. The
-            // hide → focus → show cycle below makes the window receive
-            // WM_SETFOCUS again, which is what makes the app register its
-            // input. Done only while the host is in front (tab switch / picker
-            // close / confirm dialog — the user is back here), never while we
-            // sink into the background.
-            if visible && GetForegroundWindow() == GetParent(hosted).unwrap_or_default() {
-                let attached = ensure_queue_shared(
-                    GetParent(hosted).unwrap_or_default(),
-                    hosted,
-                    child_thread,
-                );
-                sync_hosted_focus(hosted, attached);
-            }
+            let _ = SetWindowPos(as_hwnd(hwnd), None, 0, 0, 0, 0, flags);
         }
         Ok(())
     }
@@ -2609,6 +2756,7 @@ mod imp {
             });
             return;
         }
+        FOCUS_EPOCH.fetch_add(1, Ordering::Relaxed);
         focus_hosted(app, as_hwnd(parent), as_hwnd(hwnd), child_thread);
     }
 
@@ -2633,7 +2781,7 @@ mod imp {
     /// leave the slot black (hosted HWND stuck hidden while UI says attached).
     /// The brief gap shows CSS `--float-bg` on `.dapps-slot`, not a Win32
     /// veil (a stuck STATIC cover was itself a permanent black screen).
-    pub fn reactivate(app: &tauri::AppHandle, process: &str) {
+    fn reactivate(app: &tauri::AppHandle, process: &str) {
         let key = map_key(process);
         let live = with_map(|m| {
             m.get(&key).map(|e| {
@@ -2666,57 +2814,59 @@ mod imp {
             });
             return;
         }
+        let focus_epoch = FOCUS_EPOCH.load(Ordering::Relaxed);
         let now = std::time::Instant::now();
         let skip = LAST_REACTIVATE_AT
             .lock()
-            .map(|mut g| {
-                let map = g.get_or_insert_with(HashMap::new);
-                if let Some(prev) = map.get(&key) {
-                    if now.duration_since(*prev) < REACTIVATE_DEBOUNCE {
-                        return true;
-                    }
+            .map(|mut entries| {
+                let entries = entries.get_or_insert_with(HashMap::new);
+                if entries
+                    .get(&key)
+                    .is_some_and(|last| now.duration_since(*last) < REACTIVATE_DEBOUNCE)
+                {
+                    return true;
                 }
+                entries.insert(key.clone(), now);
                 false
             })
-            .unwrap_or(false);
-        if skip {
-            with_map(|m| {
-                if let Some(entry) = m.get_mut(&key) {
-                    entry.host_was_background = false;
-                }
-            });
-            return;
-        }
-        // Stamp debounce up front so concurrent heartbeat/focus paths do not
-        // start a second hide while this one is in flight.
-        if let Ok(mut g) = LAST_REACTIVATE_AT.lock() {
-            g.get_or_insert_with(HashMap::new).insert(key.clone(), now);
-        }
+            .unwrap_or(true);
         with_map(|m| {
             if let Some(entry) = m.get_mut(&key) {
                 entry.host_was_background = false;
             }
         });
+        if skip {
+            return;
+        }
         let parent_raw = parent;
         let hwnd_raw = hwnd;
         let app2 = app.clone();
-        let key_for_log = key;
         // Whole cycle on a worker thread so we never recv on the UI thread
         // (that would deadlock if run_on_main_thread only posts).
         std::thread::spawn(move || {
-            let (hid_tx, hid_rx) = std::sync::mpsc::channel::<bool>();
+            let (hid_tx, hid_rx) = std::sync::mpsc::channel::<Option<(isize, isize)>>();
+            let hide_key = key.clone();
             let posted = app2
                 .run_on_main_thread(move || {
                     let hid = unsafe {
                         let hosted = as_hwnd(hwnd_raw);
                         let host = as_hwnd(parent_raw);
-                        if GetForegroundWindow() != host
-                            || IsHungAppWindow(hosted).as_bool()
+                        let focused = GetFocus();
+                        let shown = with_map(|m| {
+                            m.get(&hide_key)
+                                .is_some_and(|entry| entry.hwnd == hwnd_raw && entry.shown != 0)
+                        });
+                        if FOCUS_EPOCH.load(Ordering::Relaxed) != focus_epoch
+                            || GetForegroundWindow() != host
+                            || !contains_focus(hosted, focused)
+                            || !shown
+                            || !entry_live(hwnd_raw, pid)
                             || !IsWindowVisible(hosted).as_bool()
+                            || IsHungAppWindow(hosted).as_bool()
                         {
-                            false
+                            None
                         } else {
-                            let _ = SetWindowPos(
+                            let hidden = SetWindowPos(
                                 hosted,
                                 None,
                                 0,
@@ -2728,65 +2878,73 @@ mod imp {
                                     | SWP_NOSIZE
                                     | SWP_NOZORDER
                                     | SWP_HIDEWINDOW,
-                            );
-                            true
+                            )
+                            .is_ok();
+                            hidden.then(|| (focused.0 as isize, GetFocus().0 as isize))
                         }
                     };
                     let _ = hid_tx.send(hid);
                 })
                 .is_ok();
-            if !posted
-                || !hid_rx
+            let hidden = if posted {
+                hid_rx
                     .recv_timeout(std::time::Duration::from_millis(500))
-                    .unwrap_or(false)
-            {
-                debug_log(&format!("reactivate {key_for_log} hide skipped"));
-                // Hide never landed: restore sticky and drop debounce so the
-                // next heartbeat can retry once the host is foreground.
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+            let Some((previous_focus, parked_focus)) = hidden else {
+                debug_log(&format!("reactivate {key} hide skipped"));
+                // A newer click cancels this recovery, including the retry.
                 with_map(|m| {
-                    if let Some(entry) = m.get_mut(&key_for_log) {
-                        entry.host_was_background = true;
+                    if FOCUS_EPOCH.load(Ordering::Relaxed) == focus_epoch {
+                        if let Some(entry) = m.get_mut(&key).filter(|entry| entry.hwnd == hwnd_raw)
+                        {
+                            entry.host_was_background = true;
+                        }
                     }
                 });
                 if let Ok(mut g) = LAST_REACTIVATE_AT.lock() {
                     if let Some(map) = g.as_mut() {
-                        map.remove(&key_for_log);
+                        map.remove(&key);
                     }
                 }
                 return;
-            }
+            };
             std::thread::sleep(std::time::Duration::from_millis(48));
-            let (shown_tx, shown_rx) = std::sync::mpsc::channel::<()>();
             let _ = app2.run_on_main_thread(move || unsafe {
                 let hosted = as_hwnd(hwnd_raw);
                 let host = as_hwnd(parent_raw);
-                if GetForegroundWindow() != host || IsHungAppWindow(hosted).as_bool() {
-                    if IsWindow(Some(hosted)).as_bool() {
-                        let _ = ShowWindow(hosted, SW_SHOWNA);
-                    }
-                    let _ = shown_tx.send(());
+                let shown = with_map(|m| {
+                    m.get(&key)
+                        .is_some_and(|entry| entry.hwnd == hwnd_raw && entry.shown != 0)
+                });
+                if !shown || !entry_live(hwnd_raw, pid) {
                     return;
                 }
-                let attached = ensure_queue_shared(host, hosted, child_thread);
-                let _ = SetWindowPos(
-                    hosted,
-                    Some(HWND_TOP),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-                );
-                let _ = SetFocus(Some(hosted));
-                let nudged = sync_hosted_focus(hosted, attached);
+                let still_owns_intent = FOCUS_EPOCH.load(Ordering::Relaxed) == focus_epoch
+                    && GetForegroundWindow() == host
+                    && GetFocus() == as_hwnd(parked_focus)
+                    && !IsHungAppWindow(hosted).as_bool();
+                let _ = ShowWindow(hosted, SW_SHOWNA);
+                if still_owns_intent {
+                    let previous = as_hwnd(previous_focus);
+                    let target = if contains_focus(hosted, previous) {
+                        previous
+                    } else {
+                        hosted
+                    };
+                    if !contains_focus(hosted, GetFocus()) {
+                        let _ = ensure_queue_shared(host, hosted, child_thread);
+                        let _ = SetFocus(Some(target));
+                    }
+                }
                 debug_log(&format!(
-                    "reactivate 0x{:X} focused={} nudged={nudged}",
-                    hosted.0 as usize,
-                    GetFocus() == hosted
+                    "reactivate 0x{hwnd_raw:X} focused={}",
+                    contains_focus(hosted, GetFocus())
                 ));
-                let _ = shown_tx.send(());
             });
-            let _ = shown_rx.recv_timeout(std::time::Duration::from_millis(500));
         });
     }
 
@@ -3217,25 +3375,6 @@ pub async fn desktop_embed_set_veil_bgr(bgr: u32) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let _ = bgr;
-        Err("当前系统不支持嵌入桌面应用".into())
-    }
-}
-
-/// Re-activate the hosted window's document the way a tab switch does, so an
-/// async image paste works without the user switching tabs.
-#[tauri::command]
-pub async fn desktop_embed_reactivate(
-    app: tauri::AppHandle,
-    process_name: String,
-) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        imp::reactivate(&app, &process_name);
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, process_name);
         Err("当前系统不支持嵌入桌面应用".into())
     }
 }

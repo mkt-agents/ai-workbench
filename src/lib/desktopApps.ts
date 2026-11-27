@@ -247,6 +247,21 @@ export function saveSlotBId(id: string): void {
   writeStorage(SLOT_B_KEY, id);
 }
 
+const ACTIVE_PANE_SIDE_KEY = "desktop-embed-active-pane-side";
+export type DesktopPaneSide = "left" | "right";
+
+export function loadActivePaneSide(): DesktopPaneSide {
+  try {
+    return localStorage.getItem(ACTIVE_PANE_SIDE_KEY) === "right" ? "right" : "left";
+  } catch {
+    return "left";
+  }
+}
+
+export function saveActivePaneSide(side: DesktopPaneSide): void {
+  writeStorage(ACTIVE_PANE_SIDE_KEY, side);
+}
+
 /** Cached Start Menu / Desktop shortcuts so the library opens instantly. */
 const INSTALLED_SHORTCUTS_CACHE_KEY = "desktop-embed-installed-shortcuts";
 /** Cached full registry scan — only filled after the user asks for “all programs”. */

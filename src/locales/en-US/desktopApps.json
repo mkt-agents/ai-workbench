@@ -119,11 +119,16 @@
   "slot": {
     "split": "Show two apps side by side",
     "single": "Back to a single pane",
-    "bEmpty": "Pick an app for this pane",
-    "bNotRunning": "No window is available to attach. Make this app primary to start it.",
-    "bAttachFailed": "Could not attach the window. Try again, or make this app primary to pick a window.",
-    "makePrimary": "Make primary",
-    "bClear": "Clear this pane"
+    "left": "Left",
+    "right": "Right",
+    "empty": "No app selected",
+    "choose": "Choose app",
+    "change": "Change app",
+    "focus": "Use controls for {{app}}",
+    "swap": "Swap left and right panes",
+    "clear": "Clear this pane",
+    "libraryTitle": "{{pane}} pane · App library",
+    "bAttachFailed": "Could not attach the window. Try again, or select the pane header to pick a window."
   },
   "storage": {
     "warn": "Settings could not be saved (storage full or blocked) — they will be lost on restart"

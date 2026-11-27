@@ -239,24 +239,26 @@
   box-shadow: var(--surface-highlight);
 }
 
-/* Slot layout: single pane (identical geometry to the old single slot) or two
-   side-by-side panes. Each pane measures its own rect, so the backend keeps
-   one hosted window glued per pane. */
+/* Keep pane chrome outside the rectangle occupied by each native window. */
 .dapps-slot-area {
   position: absolute;
   inset: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-  transition: grid-template-columns 200ms ease;
+  gap: var(--space-2);
 }
 
 .dapps-slot-area.is-split {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.dapps-slot-area.active-right .is-active-pane {
+  order: 1;
+}
+
 .dapps-slot-wrap {
-  position: relative;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
 }
@@ -266,42 +268,118 @@
   border-radius: var(--radius-md);
 }
 
-.dapps-slot-b-choices {
+.dapps-slot-area.is-split .is-active-pane {
+  border-color: var(--accent-border);
+}
+
+.dapps-slot-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.dapps-pane-header {
+  container-type: inline-size;
+  position: relative;
+  z-index: 2;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px;
-  max-width: 420px;
-  pointer-events: auto;
-}
-
-.dapps-slot-b-choices .btn {
-  gap: 6px;
-}
-
-.dapps-slot-b-close {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid transparent;
+  gap: var(--space-1);
+  min-height: 36px;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--chrome-bg);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.is-active-pane > .dapps-pane-header {
+  background: var(--accent-dim);
+  border-bottom-color: var(--accent-border);
+}
+
+.dapps-pane-side {
+  flex: none;
+  padding-inline-end: var(--space-1);
+  color: var(--text-2);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.is-active-pane .dapps-pane-side {
+  color: var(--accent-strong);
+}
+
+.dapps-pane-select {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+  padding: var(--space-1);
+  border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-3);
+  color: var(--text-0);
+  text-align: start;
   cursor: pointer;
-  pointer-events: auto;
-  transition: var(--transition-colors);
 }
 
-.dapps-slot-b-close:hover {
-  color: var(--text-1);
-  border-color: var(--border-subtle);
-  background: var(--bg-2);
+.dapps-pane-select[aria-pressed="true"] {
+  cursor: default;
+}
+
+.dapps-pane-select[aria-pressed="false"]:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.dapps-pane-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dapps-pane-name.is-empty {
+  flex: 1;
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.dapps-pane-header .dapps-status {
+  flex: none;
+  padding-inline: var(--space-1);
+  font-size: 10px;
+}
+
+.dapps-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+}
+
+.dapps-pane-icon-button {
+  width: 26px;
+  padding-inline: 0;
+  justify-content: center;
+}
+
+@container (max-width: 365px) {
+  .dapps-pane-status {
+    display: none;
+  }
+}
+
+@container (max-width: 290px) {
+  .dapps-pane-header .dapps-primary-label {
+    display: none;
+  }
+
+  .dapps-pane-header .dapps-primary {
+    padding-inline: var(--space-1);
+  }
 }
 
 .dapps-split-btn.is-on {
