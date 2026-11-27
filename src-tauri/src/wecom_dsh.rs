@@ -1884,6 +1884,71 @@ fn ensure_docgen_git_mcp_spec_in(
     })
 }
 
+/// SkyWalking MCP 的配置文件名由 `{addr, header, tzOffsetMinutes}` 的内容哈希决定：
+/// 地址 / 鉴权 / 时区任一变化都换名，`set_mcp` 的比较随之触发退役。
+/// 「回合令牌」与配置同目录同前缀（`<配置>.turn`），`mark_skywalking_turn` 也走这里，
+/// 两侧文件名必须一致，否则令牌会写到 MCP 读不到的位置。
+fn skywalking_config_path(
+    dir: &std::path::Path,
+    addr: &str,
+    header: &str,
+    tz_offset_minutes: Option<i32>,
+) -> Result<(std::path::PathBuf, Vec<u8>), String> {
+    use sha2::Digest;
+    let config = serde_json::json!({
+        "addr": addr.trim(),
+        "header": header.trim(),
+        "tzOffsetMinutes": tz_offset_minutes,
+    });
+    let body = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
+    let digest = sha2::Sha256::digest(&body);
+    let tag: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    Ok((dir.join(format!("skywalking-mcp-{tag}.json")), body))
+}
+
+/// 回合令牌路径：与配置 JSON 同目录、同前缀，脚本侧用 `CONFIG_PATH + '.turn'` 拼。
+fn skywalking_turn_path(config_path: &std::path::Path) -> std::path::PathBuf {
+    let mut name = config_path.as_os_str().to_os_string();
+    name.push(".turn");
+    std::path::PathBuf::from(name)
+}
+
+/// 每次用户 prompt 前重写回合令牌，内嵌 MCP 进程据此把 24 次 HTTP 预算按轮重置。
+///
+/// ACP 只在 `session/new|resume` 绑定 MCP，进程会跨多轮存活；没有令牌时预算是进程级的，
+/// 整个企微会话共用 24 次。令牌只含请求标识与毫秒时间戳，不含地址/密钥。
+/// 同一 OAP 配置下多个 DSH 会话共用一个令牌文件：并发时可能互相提前重置，只会放松
+/// 上限、不会误拒。失败由调用方记日志，不阻断本轮。
+pub(crate) fn mark_skywalking_turn(
+    addr: &str,
+    header: &str,
+    tz_offset_minutes: Option<i32>,
+    token: &str,
+) -> Result<(), String> {
+    let dir = engine_dir()
+        .ok_or("找不到应用数据目录")?
+        .join("mcp");
+    mark_skywalking_turn_in(&dir, addr, header, tz_offset_minutes, token)
+}
+
+/// 生产路径用 `engine_dir()`；测试走这里落临时目录。
+fn mark_skywalking_turn_in(
+    dir: &std::path::Path,
+    addr: &str,
+    header: &str,
+    tz_offset_minutes: Option<i32>,
+    token: &str,
+) -> Result<(), String> {
+    let token = token.trim();
+    if addr.trim().is_empty() || token.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建 mcp 目录失败：{e}"))?;
+    let (config_path, _) = skywalking_config_path(dir, addr, header, tz_offset_minutes)?;
+    std::fs::write(skywalking_turn_path(&config_path), token)
+        .map_err(|e| format!("写入 SkyWalking 回合令牌失败：{e}"))
+}
+
 fn ensure_skywalking_mcp_spec_in(
     dir: &std::path::Path,
     node_exe: &std::path::Path,
@@ -1891,7 +1956,6 @@ fn ensure_skywalking_mcp_spec_in(
     header: &str,
     tz_offset_minutes: Option<i32>,
 ) -> Result<Option<crate::mcp::McpServerSpec>, String> {
-    use sha2::Digest;
     let addr = addr.trim();
     if addr.is_empty() {
         return Ok(None);
@@ -1900,26 +1964,32 @@ fn ensure_skywalking_mcp_spec_in(
     let script = dir.join("skywalking-mcp.mjs");
     std::fs::write(&script, include_str!("wecom_skywalking_mcp.mjs"))
         .map_err(|e| format!("写入 SkyWalking MCP 脚本失败：{e}"))?;
-    let config = serde_json::json!({
-        "addr": addr,
-        "header": header.trim(),
-        "tzOffsetMinutes": tz_offset_minutes,
-    });
-    let body = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
-    let digest = sha2::Sha256::digest(&body);
-    let tag: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
-    let current = format!("skywalking-mcp-{tag}.json");
-    let config_path = dir.join(&current);
+    let (config_path, body) = skywalking_config_path(dir, addr, header, tz_offset_minutes)?;
     std::fs::write(&config_path, &body)
         .map_err(|e| format!("写入 SkyWalking MCP 配置失败：{e}"))?;
-    // 清理旧配置（best-effort：被占用就留给下次；hash 文件名保证不会误删当前配置）。
-    if let Ok(entries) = std::fs::read_dir(&dir) {
+    let current = config_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let current_turn = skywalking_turn_path(&config_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // 清理旧配置与孤儿令牌（best-effort：被占用就留给下次；hash 文件名保证不会误删当前配置）。
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("skywalking-mcp-")
-                && name.ends_with(".json")
-                && name != current
-            {
+            if !name.starts_with("skywalking-mcp-") {
+                continue;
+            }
+            let stale = if name.ends_with(".json.turn") {
+                name != current_turn
+            } else if name.ends_with(".json") {
+                name != current
+            } else {
+                false
+            };
+            if stale {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -3259,6 +3329,135 @@ mod tests {
             Ok(out) => panic!("node --check 失败：{}", String::from_utf8_lossy(&out.stderr)),
             Err(_) => eprintln!("skip: node not found"),
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// spec.args 形如 `"<script>" "<config>"`：取配置路径，确认令牌与 MCP 读的是同一个文件。
+    fn spec_config_path(args: &str) -> std::path::PathBuf {
+        let parts: Vec<&str> = args.split('"').collect();
+        std::path::PathBuf::from(parts.get(3).copied().unwrap_or_default())
+    }
+
+    /// 发一条 `skywalking_query` 调用并读回应答（脚本每行一个 JSON-RPC）。
+    fn mcp_logs_call(
+        stdin: &mut std::process::ChildStdin,
+        stdout: &mut std::io::BufReader<std::process::ChildStdout>,
+        id: u64,
+    ) -> String {
+        use std::io::{BufRead, Write};
+        let line = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "skywalking_query", "arguments": { "minutes": 5 } }
+        });
+        writeln!(stdin, "{line}").expect("写 MCP 请求");
+        stdin.flush().expect("flush MCP 请求");
+        let mut resp = String::new();
+        let read = stdout.read_line(&mut resp).expect("读 MCP 应答");
+        assert!(read > 0, "MCP 进程提前退出");
+        resp
+    }
+
+    #[test]
+    fn skywalking_turn_marker_sits_beside_config_and_reclaims_orphans() {
+        let base = std::env::temp_dir().join(format!(
+            "wecom-sw-turn-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let dir = base.join("mcp");
+        let node = std::path::Path::new(r"C:\Program Files\nodejs\node.exe");
+        let addr = "http://oap.example/graphql";
+        let spec = ensure_skywalking_mcp_spec_in(&dir, node, addr, "Auth: x", Some(480))
+            .unwrap()
+            .unwrap();
+        let config = spec_config_path(&spec.args);
+        assert!(config.exists(), "配置应已落盘：{}", config.display());
+
+        mark_skywalking_turn_in(&dir, addr, "Auth: x", Some(480), "req-1|1000").unwrap();
+        let turn_file = skywalking_turn_path(&config);
+        assert_eq!(std::fs::read_to_string(&turn_file).unwrap(), "req-1|1000");
+        // 空地址 / 空令牌都不写文件，也不清掉已有令牌。
+        mark_skywalking_turn_in(&dir, "   ", "Auth: x", Some(480), "req-2|2000").unwrap();
+        mark_skywalking_turn_in(&dir, addr, "Auth: x", Some(480), "   ").unwrap();
+        assert_eq!(std::fs::read_to_string(&turn_file).unwrap(), "req-1|1000");
+
+        // 配置换名后旧配置与孤儿令牌一起回收，当前令牌不能被误删。
+        let stale_config = dir.join("skywalking-mcp-deadbeef.json");
+        let stale_turn = dir.join("skywalking-mcp-deadbeef.json.turn");
+        std::fs::write(&stale_config, b"{}").unwrap();
+        std::fs::write(&stale_turn, b"old").unwrap();
+        ensure_skywalking_mcp_spec_in(&dir, node, addr, "Auth: x", Some(480)).unwrap();
+        assert!(!stale_config.exists(), "旧配置应被回收");
+        assert!(!stale_turn.exists(), "孤儿令牌应被回收");
+        assert!(turn_file.exists(), "当前令牌不能被误删");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn skywalking_mcp_turn_token_resets_request_budget() {
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skip: node not found");
+            return;
+        }
+        let base = std::env::temp_dir().join(format!(
+            "wecom-sw-budget-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let dir = base.join("mcp");
+        let node = std::path::Path::new("node");
+        // 端口 1 没有 OAP：每次查询都立刻 transport_error，但仍扣一次预算。
+        let addr = "http://127.0.0.1:1/graphql";
+        let spec = ensure_skywalking_mcp_spec_in(&dir, node, addr, "", None)
+            .unwrap()
+            .unwrap();
+        let config = spec_config_path(&spec.args);
+        let script = dir.join("skywalking-mcp.mjs");
+        let mut child = std::process::Command::new("node")
+            .arg(&script)
+            .arg(&config)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("启动 skywalking MCP");
+        let mut stdin = child.stdin.take().expect("stdin");
+        let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+
+        for i in 0..24 {
+            let resp = mcp_logs_call(&mut stdin, &mut stdout, i + 1);
+            assert!(
+                !resp.contains("budget_exceeded"),
+                "第 {} 次不该耗尽预算：{resp}",
+                i + 1
+            );
+            assert!(
+                resp.contains("transport_error"),
+                "第 {} 次应是网络失败：{resp}",
+                i + 1
+            );
+        }
+        let exhausted = mcp_logs_call(&mut stdin, &mut stdout, 100);
+        assert!(
+            exhausted.contains("budget_exceeded"),
+            "第 25 次应耗尽预算：{exhausted}"
+        );
+        // 宿主开新回合写新令牌 → 计数归零，错误回到真实的网络失败。
+        mark_skywalking_turn_in(&dir, addr, "", None, "req-2|2000").unwrap();
+        let after = mcp_logs_call(&mut stdin, &mut stdout, 101);
+        assert!(
+            after.contains("transport_error"),
+            "新回合应恢复预算：{after}"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
         let _ = std::fs::remove_dir_all(&base);
     }
 

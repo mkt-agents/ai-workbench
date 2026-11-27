@@ -1347,6 +1347,18 @@ impl Orchestrator {
                 .map(|s| s.chars().count())
                 .sum(),
         );
+        // 日志预算按轮重置：DSH 的 MCP 进程跨轮存活（ACP 只在 new/resume 绑定），
+        // 宿主在 prompt 前重写回合令牌，内嵌 SkyWalking MCP 读到新令牌就把 24 次
+        // HTTP 计数清零；写失败只记日志，不让日志能力缺失阻断本轮。
+        if oap_ready {
+            let token = format!("{preflight_request}|{}", chrono::Utc::now().timestamp_millis());
+            if let Err(e) = crate::wecom_dsh::mark_skywalking_turn(&addr, &header, offset, &token) {
+                crate::wecom_log::write(
+                    "dsh",
+                    &format!("msgid={} skywalking turn marker 失败：{e}", msg.msgid),
+                );
+            }
+        }
         let mut turn = engine.prompt(&acp_session, prompt_blocks).await?;
 
         // 登记为该会话「在跑的回合」，供「停止」指令 session/cancel + 收尾气泡。

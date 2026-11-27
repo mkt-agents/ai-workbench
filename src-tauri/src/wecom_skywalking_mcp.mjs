@@ -7,11 +7,18 @@
 // 逻辑移植自 src-tauri/src/wecom_skywalking.rs（与预设脚本 v7.1.2 同协议）：
 // - GraphQL 查询串硬编码，模型只能传 variables；
 // - 值可信度一步不让：返回行逐条形状校验，坏行整页报错；
-// - 进程生命周期内 HTTP 请求封顶 24 次、单请求 20s、响应 4MiB；
+// - 每个用户回合 HTTP 请求封顶 24 次、单请求 20s、响应 4MiB；
 // - 成功响应按 (endpoint,header,query,variables) 缓存复用（singleflight 语义）。
 //
 // 配置来自宿主写入的 JSON 文件（argv[2]）：{ addr, header, tzOffsetMinutes }。
 // 仅用 Node 内置能力（fetch 需 Node ≥ 18；DSH 本身依赖 Node）。
+//
+// 预算按轮重置：ACP 只在 session/new|resume 绑定 MCP，进程会跨多轮用户消息存活，
+// 所以 24 次不能按进程算（否则整个会话排队吃同一份额度）。宿主在每次 prompt 前重写
+// 同目录的 `<配置>.turn` 令牌文件，这里每次发 HTTP 前比一次；令牌变化即清零计数。
+// 令牌缺失 / 读不到 / 为空时保持累计（fail-closed，等同旧行为）。
+// 已知边界：同一 OAP 配置下多个 DSH 会话共用一个令牌文件，别的会话开新轮可能让本会话
+// 提前重置——只会放松上限，不会误拒。
 
 import { createInterface } from 'node:readline';
 import { readFileSync } from 'node:fs';
@@ -55,9 +62,28 @@ const MAX_TRACE_IDS = 8;
 
 // ---------- 预算与缓存 ----------
 
+const TURN_FILE = `${CONFIG_PATH}.turn`;
 let requestCount = 0;
 let cacheHits = 0;
+let lastTurnToken = '';
 const cache = new Map();
+
+function readTurnToken() {
+  try {
+    const token = readFileSync(TURN_FILE, 'utf8').trim();
+    return token;
+  } catch {
+    return '';
+  }
+}
+
+// 宿主开了新回合就把本轮 HTTP 计数清零；缓存与 cacheHits 保留（命中不计费）。
+function syncTurn() {
+  const token = readTurnToken();
+  if (!token || token === lastTurnToken) return;
+  lastTurnToken = token;
+  requestCount = 0;
+}
 
 // ---------- 通用工具 ----------
 
@@ -195,6 +221,7 @@ function cacheableResponse(query, body) {
 }
 
 async function graphql(url, header, query, variables) {
+  syncTurn();
   if (requestCount >= MAX_QUERY_REQUESTS) {
     throw new Error(`budget_exceeded: 本轮 SkyWalking 查询已达 ${MAX_QUERY_REQUESTS} 次，请基于现有证据作答。`);
   }

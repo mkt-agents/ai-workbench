@@ -381,6 +381,8 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 
 **32 是回合上限，不是 HTTP 并发。** SkyWalking 仍按 OAP 端点最多 2 个在途 HTTP；每次排障的 24 次实际 HTTP / 120 秒累计采集预算与 DSH **1800 秒**整轮约束不变。
 
+**DSH 档的 24 次是「每轮对话」上限，不是整个会话。** ACP 只在 `session/new|resume` 绑定 MCP，内嵌 `src/wecom_skywalking_mcp.mjs` 进程会跨多轮用户消息存活；宿主 `run_dsh_turn_inner` 在每次 `session/prompt` 前重写同一配置旁的回合令牌 `<配置>.turn`（内容 `requestId|epoch_ms`），MCP 每次发 HTTP 前比一次令牌，变化即把计数清零。成功响应缓存与 `cacheHits` 跨轮保留、命中不扣预算；令牌缺失 / 读不到 / 为空时退回进程级累计（与旧行为一致）。同一 OAP 配置下多个 DSH 会话共用一个令牌文件：并发时可能互相提前重置，只会放松上限、不会误拒。
+
 前端定向验证：局部 strict TypeScript 检查通过；归一化覆盖 32 个合法整数与 9 个非法/缺省值；双语 Node SSR 共 86 次 fixture，覆盖每个合法保存值的 option/选中项、运行数独立于设置值、缺字段/null/0/非法数值与群可见性文案。未改 CSS、未运行 full build/cargo，未重启通道；桌面视觉与后端端到端结果另计。
 
 ## 排障回复保护、统一报告与每条消息耗时（2026-10-29）
