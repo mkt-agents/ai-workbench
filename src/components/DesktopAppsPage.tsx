@@ -8,7 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AlertTriangle,
   AppWindow,
@@ -114,37 +115,38 @@ const HEARTBEAT_MS = 400;
  * lands (IPC failure, crash) the timeout hides it anyway. */
 const PENDING_HIDE_TIMEOUT_MS = 250;
 
-/**
- * Visibility ops per process run strictly in issue order.
- *
- * A tab-switch hide and a quick switch-back show are two independent IPC
- * calls; if the backend ever landed the hide after the show, the entry would
- * sit at shown=0 while the page is active — the heartbeat keeps re-hiding it
- * and the slot stays blank for good. Chaining through this queue makes the
- * order deterministic; different processes are independent by key.
- */
-const showQueues = new Map<string, Promise<void>>();
-const enqueueShow = (processName: string, op: () => Promise<void>): Promise<void> => {
-  const wrapped = async () => {
+type WindowOperationQueue = Map<string, Promise<unknown>>;
+
+function enqueueWindowOperation<T>(
+  queue: WindowOperationQueue,
+  processName: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = processName.trim().toLowerCase();
+  const next = (queue.get(key) ?? Promise.resolve()).then(operation, operation);
+  queue.set(key, next);
+  const cleanup = () => {
+    if (queue.get(key) === next) queue.delete(key);
+  };
+  void next.then(cleanup, cleanup);
+  return next;
+}
+
+// A late hide must not land after a show when the user switches back quickly.
+const showQueues: WindowOperationQueue = new Map();
+const enqueueShow = (processName: string, op: () => Promise<void>): Promise<void> =>
+  enqueueWindowOperation(showQueues, processName, async () => {
     try {
       await op();
     } finally {
-      // A visibility change just settled: any outgoing window parked behind
-      // the (now on-screen or now-gone) front window can leave safely.
+      // The new window has arrived or cleared. Retire any outgoing window.
       flushPendingHostedHides(processName);
     }
-  };
-  const next = (showQueues.get(processName) ?? Promise.resolve()).then(wrapped, wrapped);
-  // The map must hold the promise this callback actually settles; comparing
-  // against `next` (the promise `finally` was derived from) never matches, so
-  // every process used to leave a settled entry behind forever.
-  let settled: Promise<void>;
-  settled = next.finally(() => {
-    if (showQueues.get(processName) === settled) showQueues.delete(processName);
   });
-  showQueues.set(processName, settled);
-  return next;
-};
+
+// Both pane effects and reveal paths resize the same window during a handoff.
+// Drain old placements before issuing new ones, even across effect lifetimes.
+const relayoutQueues: WindowOperationQueue = new Map();
 
 /**
  * Outgoing tab windows waiting to leave. The hide must not race the incoming
@@ -251,7 +253,12 @@ export default function DesktopAppsPage() {
   const invokeDesktopEmbedFind = useGlobalStore((s) => s.invokeDesktopEmbedFind);
   const invokeDesktopEmbedAttach = useGlobalStore((s) => s.invokeDesktopEmbedAttach);
   const invokeDesktopEmbedAttachWait = useGlobalStore((s) => s.invokeDesktopEmbedAttachWait);
-  const invokeDesktopEmbedRelayout = useGlobalStore((s) => s.invokeDesktopEmbedRelayout);
+  const invokeRelayout = useGlobalStore((s) => s.invokeDesktopEmbedRelayout);
+  const invokeDesktopEmbedRelayout = useCallback(
+    (args: Parameters<typeof invokeRelayout>[0]) =>
+      enqueueWindowOperation(relayoutQueues, args.processName, () => invokeRelayout(args)),
+    [invokeRelayout],
+  );
   const invokeDesktopEmbedShow = useGlobalStore((s) => s.invokeDesktopEmbedShow);
   const invokeDesktopEmbedFocus = useGlobalStore((s) => s.invokeDesktopEmbedFocus);
   const invokeDesktopEmbedSetVeilBgr = useGlobalStore((s) => s.invokeDesktopEmbedSetVeilBgr);
@@ -393,6 +400,16 @@ export default function DesktopAppsPage() {
   const slotRef = useRef<HTMLDivElement>(null);
   const slotBRef = useRef<HTMLDivElement>(null);
   const paneSyncRef = useRef<{ active?: () => void; other?: () => void }>({});
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    // A docked top-level window follows the slot in screen coordinates.
+    const moved = getCurrentWindow().onMoved(() => {
+      paneSyncRef.current.active?.();
+      paneSyncRef.current.other?.();
+    }).catch(() => undefined);
+    return () => { void moved.then((unlisten) => unlisten?.()); };
+  }, []);
   const storageWarnTimer = useRef(0);
   const attachedRef = useRef(false);
   const aliveRef = useRef(true);
@@ -1690,11 +1707,11 @@ export default function DesktopAppsPage() {
     setPhase("closing");
     // Native child paints above the webview — hide first so the closing
     // overlay is visible for the whole detach, same idea as kill.
-    void enqueueShow(processName, () =>
-      invokeDesktopEmbedShow(processName, false).catch(() => undefined)
-    );
     try {
-      await invokeDesktopEmbedDetach(processName);
+      await enqueueShow(processName, async () => {
+        await invokeDesktopEmbedShow(processName, false).catch(() => undefined);
+        await invokeDesktopEmbedDetach(processName);
+      });
       hostedRef.current.delete(processName.trim().toLowerCase());
       if (lastActiveHostedRef.current === processName) lastActiveHostedRef.current = "";
       if (activeIdRef.current === active.id) {

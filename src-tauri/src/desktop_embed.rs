@@ -2,18 +2,16 @@
 //!
 //! Desktop apps such as DeepSeek Harness desktop and Cursor draw through their
 //! own Chromium surfaces behind private URL schemes, so a webview cannot show
-//! them. The only way to put them *inside* the app is to adopt their top-level
-//! window with `SetParent` and keep it positioned over the page slot:
+//! them. We host their native windows over the page slots.
 //!
 //! * `find` locates the window by image name (visible top-level windows only).
-//! * `attach` remembers the original styles/parent, strips the standalone frame,
-//!   marks the window `WS_CHILD` of the main window and places it.
+//! * `attach` saves the original styles and placement, then places the hosted
+//!   window in a slot. 360ChromeX uses an owned top-level window for input.
 //! * `relayout` follows the slot while the page resizes; `show` toggles it.
 //! * `detach` — and `detach_all`, run on exit — hands the window back untouched.
 //!
-//! Adopted windows are children of ours, which means Windows destroys them along
-//! with our window. Every exit path therefore detaches first; `release` restores
-//! the original frame, owner and screen position.
+//! Windows destroys both child and owned windows with the host. The exit paths
+//! detach first so `release` can restore the original frame, owner and position.
 
 /// One embeddable desktop window, as reported to the frontend.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -383,6 +381,25 @@ mod imp {
         process.trim().to_ascii_lowercase()
     }
 
+    // 360ChromeX needs native top-level activation for its browser controls.
+    // An owned window keeps that activation while following the host slot.
+    fn uses_owned_dock(process_key: &str) -> bool {
+        matches!(process_key, "360chromex" | "360chromex.exe")
+    }
+
+    fn dock_owner(hwnd: HWND) -> Option<HWND> {
+        unsafe {
+            if GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD.0 as isize != 0 {
+                return None;
+            }
+            GetWindow(hwnd, GW_OWNER).ok()
+        }
+    }
+
+    fn dock_host_visible(owner: HWND) -> bool {
+        unsafe { IsWindowVisible(owner).as_bool() && !IsIconic(owner).as_bool() }
+    }
+
     /// Last "everything running" scan. Shared by the page's status dots and the
     /// app library so a poll burst costs one `EnumWindows`, not one per caller.
     static RUNNING_APPS: Mutex<Option<(std::time::Instant, Vec<DesktopRunningApp>)>> =
@@ -517,6 +534,9 @@ mod imp {
             }
             if GetParent(hwnd).unwrap_or_default() != parent {
                 return "not-child";
+            }
+            if dock_owner(hwnd) == Some(parent) && !dock_host_visible(parent) {
+                return "";
             }
             if IsIconic(hwnd).as_bool() {
                 return "minimized";
@@ -1166,10 +1186,25 @@ mod imp {
     /// deliberately hides the hosted window (it paints above the webview and
     /// would cover the dialog), and a relayout must not flip it back on.
     fn place(hwnd: HWND, x: f64, y: f64, width: f64, height: f64, scale: f64, show: bool) {
-        let px = (x * scale).round() as i32;
-        let py = (y * scale).round() as i32;
+        let mut point = POINT {
+            x: (x * scale).round() as i32,
+            y: (y * scale).round() as i32,
+        };
+        let owner = dock_owner(hwnd);
+        let (insert_after, z_order) = if let Some(owner) = owner {
+            // Top-level windows use screen coordinates. Preserve z-order so
+            // a heartbeat cannot raise the workbench over another app.
+            if !unsafe { ClientToScreen(owner, &mut point) }.as_bool() {
+                return;
+            }
+            (None, SWP_NOZORDER)
+        } else {
+            (Some(HWND_TOP), Default::default())
+        };
+        let (px, py) = (point.x, point.y);
         let pw = ((width * scale).round() as i32).max(1);
         let ph = ((height * scale).round() as i32).max(1);
+        let show = show && owner.is_none_or(dock_host_visible);
         let visibility = if show { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
         unsafe {
             // A hung (not-responding) foreign window would stall the whole
@@ -1182,15 +1217,12 @@ mod imp {
             if IsHungAppWindow(hwnd).as_bool() {
                 let _ = SetWindowPos(
                     hwnd,
-                    Some(HWND_TOP),
+                    insert_after,
                     px,
                     py,
                     pw,
                     ph,
-                    SWP_NOACTIVATE
-                        | SWP_NOSENDCHANGING
-                        | SWP_ASYNCWINDOWPOS
-                        | visibility,
+                    SWP_NOACTIVATE | z_order | SWP_NOSENDCHANGING | SWP_ASYNCWINDOWPOS | visibility,
                 );
                 return;
             }
@@ -1201,8 +1233,8 @@ mod imp {
             // undoing the size we just set. The window stayed parented but
             // visibly too small — the "it is in the page but not really
             // embedded" symptom.
-            let flags = SWP_NOACTIVATE | SWP_NOSENDCHANGING | visibility;
-            let _ = SetWindowPos(hwnd, Some(HWND_TOP), px, py, pw, ph, flags);
+            let flags = SWP_NOACTIVATE | z_order | SWP_NOSENDCHANGING | visibility;
+            let _ = SetWindowPos(hwnd, insert_after, px, py, pw, ph, flags);
             // Confirm the write landed: some shells clamp the size once while
             // starting up even with the message suppressed. One retry wins that
             // race; the 400ms heartbeat repairs anything that happens later.
@@ -1211,7 +1243,7 @@ mod imp {
                 && ((check.right - check.left - pw).abs() > 2
                     || (check.bottom - check.top - ph).abs() > 2)
             {
-                let _ = SetWindowPos(hwnd, Some(HWND_TOP), px, py, pw, ph, flags);
+                let _ = SetWindowPos(hwnd, insert_after, px, py, pw, ph, flags);
             }
             // A window adopted while maximized (Chromium re-asserts its own
             // maximized placement from inside the WM_WINDOWPOSCHANGING sync of
@@ -1231,12 +1263,12 @@ mod imp {
                     let _ = SetWindowPlacement(hwnd, &wp);
                     let _ = SetWindowPos(
                         hwnd,
-                        Some(HWND_TOP),
+                        insert_after,
                         px,
                         py,
                         pw,
                         ph,
-                        SWP_NOACTIVATE | visibility,
+                        SWP_NOACTIVATE | z_order | visibility,
                     );
                 }
                 let _ = RedrawWindow(
@@ -1252,8 +1284,16 @@ mod imp {
                 .lock()
                 .map(|mut g| nudge_step(&mut g, key, show))
                 .unwrap_or(false);
-            if settled {
-                let _ = SetWindowPos(hwnd, None, px - 1, py, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
+            if settled && owner.is_none() {
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    px - 1,
+                    py,
+                    pw,
+                    ph,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                );
                 let _ = SetWindowPos(hwnd, None, px, py, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
                 debug_log(&format!("place 0x{:X} settle nudge", key.0));
             }
@@ -1267,12 +1307,14 @@ mod imp {
             let host = GetParent(hwnd).unwrap_or_default();
             let in_client = !host.is_invalid() && ClientToScreen(host, &mut origin).as_bool();
             let mut client = RECT::default();
-            let client_size =
-                if !host.is_invalid() && GetClientRect(host, &mut client).is_ok() {
-                    format!("client=({},{})", client.right, client.bottom)
-                } else {
-                    "client=(?,?)".into()
-                };
+            let client_size = if !host.is_invalid() && GetClientRect(host, &mut client).is_ok() {
+                format!("client=({},{})", client.right, client.bottom)
+            } else {
+                "client=(?,?)".into()
+            };
+            if owner.is_some() {
+                origin = POINT::default();
+            }
             let (ax, ay, aw, ah) = (
                 actual.left - origin.x,
                 actual.top - origin.y,
@@ -1309,8 +1351,9 @@ mod imp {
         }
         // GetWindowRect is in screen coordinates even for children, so the
         // window reappears where the user last saw it.
+        let docked = dock_owner(hwnd) == Some(as_hwnd(entry.parent));
         let mut rect = RECT::default();
-        let placed = unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok();
+        let placed = !docked && unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok();
         unsafe {
             // Detach the input queues first, while the window is still ours:
             // the two threads must stop sharing focus/activation state before
@@ -1321,30 +1364,33 @@ mod imp {
                     let _ = AttachThreadInput(entry.attached_thread, host_thread, false);
                 }
             }
-            let _ = SetParent(hwnd, None);
-            // Keep the CURRENT visibility, not the one from attach time: the
-            // app may have hidden its own window while it was embedded (a
-            // splash being disposed), and handing it back must not flip that
-            // hidden window back to visible on the desktop.
-            let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-            if current_style & WS_VISIBLE.0 as isize != 0 {
+            if docked {
+                let _ = SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, entry.owner);
+            } else {
+                let _ = SetParent(hwnd, None);
+            }
+            // A menu or tab switch can hide the docked browser. Restore its
+            // standalone visibility. For children, a hidden splash stays hidden.
+            let visible_style =
+                GetWindowLongPtrW(hwnd, GWL_STYLE) | if docked { entry.style } else { 0 };
+            let visible = visible_style & WS_VISIBLE.0 as isize != 0;
+            if visible {
                 SetWindowLongPtrW(hwnd, GWL_STYLE, entry.style | WS_VISIBLE.0 as isize);
             } else {
                 SetWindowLongPtrW(hwnd, GWL_STYLE, entry.style & !(WS_VISIBLE.0 as isize));
             }
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, entry.exstyle);
-            if entry.owner != 0 {
+            if !docked && entry.owner != 0 {
                 SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, entry.owner);
             }
             // Restore the ORIGINAL placement, not just style bits: a window
             // adopted maximized had its placement forced to normal for the
             // embed; handing it back with a restored WS_MAXIMIZE style bit but
             // a normal placement is the exact mismatch that used to cause the
-            // slot drift. A hidden-now window is never resurrected: the app
-            // may have hidden it while embedded (a splash being disposed).
+            // slot drift.
             let mut placement = entry.placement;
             placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
-            if current_style & WS_VISIBLE.0 as isize == 0 {
+            if !visible {
                 placement.showCmd = SW_HIDE.0 as u32;
             }
             let _ = SetWindowPlacement(hwnd, &placement);
@@ -1490,7 +1536,7 @@ mod imp {
             return;
         };
         let hwnd = as_hwnd(raw);
-        if contains_focus(hwnd, focused) || !entry_live(raw, pid) {
+        if contains_focus(hwnd, focused) || !entry_live(raw, pid) || dock_owner(hwnd).is_some() {
             return;
         }
         unsafe {
@@ -1718,6 +1764,12 @@ mod imp {
                 return;
             }
             let fg_before = GetForegroundWindow();
+            if dock_owner(hwnd) == Some(parent) {
+                if GetForegroundWindow() != hwnd && raise_host(parent) {
+                    let _ = SetForegroundWindow(hwnd);
+                }
+                return;
+            }
             let raised = raise_host(parent);
             let nudged = contains_focus(hwnd, GetFocus())
                 || sync_hosted_focus(hwnd, ensure_queue_shared(parent, hwnd, child_thread));
@@ -1738,6 +1790,9 @@ mod imp {
     /// queue attach FIRST (even with the host not in front — the user will
     /// come back and click), then re-nudges, paced from a background thread.
     fn refocus(app: &tauri::AppHandle, parent: HWND, hwnd: HWND, child_thread: u32) {
+        if dock_owner(hwnd) == Some(parent) {
+            return;
+        }
         let app = app.clone();
         let parent_raw = parent.0 as isize;
         let hwnd_raw = hwnd.0 as isize;
@@ -1851,7 +1906,7 @@ mod imp {
     /// back as maximized — restoring only the WS_MAXIMIZE style bit leaves the
     /// style inconsistent with the (restored-to-normal) placement, the exact
     /// mismatch that caused the slot drift.
-    fn take_over(hwnd: HWND, parent: HWND) -> Result<(u32, WINDOWPLACEMENT), String> {
+    fn take_over(hwnd: HWND, parent: HWND, docked: bool) -> Result<(u32, WINDOWPLACEMENT), String> {
         unsafe {
             // Original placement, captured before anything touches the window.
             let mut original = WINDOWPLACEMENT {
@@ -1891,8 +1946,9 @@ mod imp {
             }
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
             let exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let child_style = (style
-                & !(WS_POPUP.0 as isize
+            let hosted_style = (style
+                & !(WS_CHILD.0 as isize
+                    | WS_POPUP.0 as isize
                     | WS_CAPTION.0 as isize
                     | WS_THICKFRAME.0 as isize
                     | WS_SYSMENU.0 as isize
@@ -1900,9 +1956,9 @@ mod imp {
                     | WS_MINIMIZEBOX.0 as isize
                     | WS_MAXIMIZEBOX.0 as isize
                     | WS_MAXIMIZE.0 as isize))
-                | WS_CHILD.0 as isize;
+                | if docked { WS_POPUP.0 } else { WS_CHILD.0 } as isize;
             let host_style = GetWindowLongPtrW(parent, GWL_STYLE);
-            let host_style_changed = host_style & WS_CLIPCHILDREN.0 as isize == 0;
+            let host_style_changed = !docked && host_style & WS_CLIPCHILDREN.0 as isize == 0;
             // Deliberately no WS_VISIBLE: `place` decides visibility, so the
             // window cannot flash onto the desktop between here and SetParent.
             //
@@ -1910,7 +1966,7 @@ mod imp {
             // higher integrity level refuses these calls (UIPI), and stopping
             // half-way would leave the user's app hidden and frameless with no
             // way back except restarting it.
-            if let Err(error) = set_style_checked(hwnd, GWL_STYLE, child_style) {
+            if let Err(error) = set_style_checked(hwnd, GWL_STYLE, hosted_style) {
                 restore_taken_state(
                     hwnd,
                     parent,
@@ -1986,6 +2042,22 @@ mod imp {
                     | SWP_NOACTIVATE
                     | SWP_HIDEWINDOW,
             );
+            if docked {
+                if let Err(error) = set_style_checked(hwnd, GWLP_HWNDPARENT, parent.0 as isize) {
+                    restore_taken_state(
+                        hwnd,
+                        parent,
+                        style,
+                        exstyle,
+                        host_style,
+                        false,
+                        &original,
+                        was_visible,
+                    );
+                    return Err(format!("无法停靠目标窗口：{error}"));
+                }
+                return Ok((0, original));
+            }
             if let Err(error) = SetParent(hwnd, Some(parent)) {
                 restore_taken_state(
                     hwnd,
@@ -2116,7 +2188,7 @@ mod imp {
         }
         let exstyle = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
         let owner = unsafe { GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) };
-        let (attached_thread, placement) = take_over(hwnd, parent)
+        let (attached_thread, placement) = take_over(hwnd, parent, uses_owned_dock(&key))
             .map_err(|e| format!("无法接管 {process} 的窗口（{text}）: {e}"))?;
         place(hwnd, x, y, width, height, scale, true);
         focus_hosted(app, parent, hwnd, attached_thread);
@@ -2238,13 +2310,14 @@ mod imp {
             unsafe { IsIconic(found.hwnd) }.as_bool(),
             unsafe { IsZoomed(found.hwnd) }.as_bool()
         ));
-        let (attached_thread, placement) = take_over(found.hwnd, parent).map_err(|e| {
-            debug_log(&format!(
-                "attach {key} hwnd=0x{:X} class={} FAILED {e}",
-                found.hwnd.0 as usize, found.class
-            ));
-            AttachFail::Hard(format!("无法接管 {process} 的窗口（{}）: {e}", found.class))
-        })?;
+        let (attached_thread, placement) = take_over(found.hwnd, parent, uses_owned_dock(&key))
+            .map_err(|e| {
+                debug_log(&format!(
+                    "attach {key} hwnd=0x{:X} class={} FAILED {e}",
+                    found.hwnd.0 as usize, found.class
+                ));
+                AttachFail::Hard(format!("无法接管 {process} 的窗口（{}）: {e}", found.class))
+            })?;
         place(found.hwnd, x, y, width, height, scale, true);
         focus_hosted(app, parent, found.hwnd, attached_thread);
         refocus(app, parent, found.hwnd, attached_thread);
@@ -2423,11 +2496,17 @@ mod imp {
             };
         }
 
-        if entry_parent != 0 && unsafe { GetParent(window) }.unwrap_or_default() != parent {
+        let docked = uses_owned_dock(&key);
+        let host_matches = if docked {
+            dock_owner(window) == Some(parent)
+        } else {
+            unsafe { GetParent(window) }.unwrap_or_default() == parent
+        };
+        if entry_parent != 0 && !host_matches {
             // The app put its frame back: take it over again. The entry keeps
             // its ORIGINAL placement — the re-takeover's snapshot is already
             // of a child window, not the pre-embed state.
-            if take_over(window, parent).is_err() {
+            if take_over(window, parent, docked).is_err() {
                 debug_log(&format!("relayout {key} re-parent failed"));
                 return Ok(lost());
             }
@@ -2458,9 +2537,13 @@ mod imp {
         // its bottom clipped. The parent link still looks healthy, so this is
         // the one repair that has to be checked separately.
         let live_style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) };
-        if live_style & (WS_CAPTION.0 as isize | WS_POPUP.0 as isize) != 0 {
-            if take_over(window, parent).is_err() {
-                debug_log(&format!("relayout {key} re-takeover (frame returned) failed"));
+        let unexpected_frame = live_style & WS_CAPTION.0 as isize != 0
+            || (!docked && live_style & WS_POPUP.0 as isize != 0);
+        if unexpected_frame {
+            if take_over(window, parent, docked).is_err() {
+                debug_log(&format!(
+                    "relayout {key} re-takeover (frame returned) failed"
+                ));
                 return Ok(lost());
             }
             place(window, x, y, width, height, scale, entry_shown != 0);
@@ -2538,6 +2621,7 @@ mod imp {
         // we hid the window ourselves (picker dialog): that is not an
         // app-side hide and swapping would drag in some other window.
         if entry_shown != 0
+            && (!docked || dock_host_visible(parent))
             && frame_scan_due(&key, warning == "invisible" || warning == "size")
         {
             if let Some(found) = find_frame(process) {
@@ -2554,7 +2638,7 @@ mod imp {
                     let style = unsafe { GetWindowLongPtrW(found.hwnd, GWL_STYLE) };
                     let exstyle = unsafe { GetWindowLongPtrW(found.hwnd, GWL_EXSTYLE) };
                     let owner = unsafe { GetWindowLongPtrW(found.hwnd, GWLP_HWNDPARENT) };
-                    match take_over(found.hwnd, parent) {
+                    match take_over(found.hwnd, parent, docked) {
                         Ok((attached_thread, placement)) => {
                             debug_log(&format!(
                                 "relayout {key} swap {warning} (class={class}) -> hwnd=0x{:X} class={}",
@@ -2622,23 +2706,24 @@ mod imp {
         // owns keyboard focus may refresh its embedded document.
         let focused = foreground_focus(parent);
         let owns_focus = focused.is_some_and(|focused| contains_focus(window, focused));
-        let should_reactivate = with_map(|m| {
-            let Some(entry) = m.get_mut(&key) else {
-                return false;
-            };
-            // Launch-embed steals FG for a moment; do not treat that as a real
-            // leave/return or we hide a fresh embed and race into a black slot.
-            if entry.attached_at.elapsed() < REACTIVATE_ATTACH_GRACE {
-                entry.host_was_background = false;
-                return false;
-            }
-            note_host_foreground(
-                focused.is_some(),
-                entry.shown != 0,
-                owns_focus,
-                &mut entry.host_was_background,
-            )
-        });
+        let should_reactivate = !docked
+            && with_map(|m| {
+                let Some(entry) = m.get_mut(&key) else {
+                    return false;
+                };
+                // Launch-embed steals FG for a moment; do not treat that as a real
+                // leave/return or we hide a fresh embed and race into a black slot.
+                if entry.attached_at.elapsed() < REACTIVATE_ATTACH_GRACE {
+                    entry.host_was_background = false;
+                    return false;
+                }
+                note_host_foreground(
+                    focused.is_some(),
+                    entry.shown != 0,
+                    owns_focus,
+                    &mut entry.host_was_background,
+                )
+            });
         if should_reactivate {
             reactivate(app, process);
         }
@@ -2670,6 +2755,7 @@ mod imp {
                 entry.shown = if visible { 1 } else { 0 };
             }
         });
+        let visible = visible && dock_owner(as_hwnd(hwnd)).is_none_or(dock_host_visible);
         let flags = SWP_NOACTIVATE
             | SWP_NOMOVE
             | SWP_NOSIZE
@@ -2734,6 +2820,7 @@ mod imp {
     pub fn detach(process: &str) {
         let key = map_key(process);
         if let Some(entry) = with_map(|m| m.remove(&key)) {
+            debug_log(&format!("detach {key} hwnd=0x{:X}", entry.hwnd));
             release(entry);
         }
     }
@@ -2994,6 +3081,15 @@ mod imp {
             assert!(is_crash_or_dialog_window(&decoy));
             assert!(!looks_like_main_frame(&decoy));
             assert!(is_non_ui_window(&decoy));
+        }
+
+        #[test]
+        fn owned_dock_is_limited_to_360_chrome_x() {
+            assert!(uses_owned_dock(&map_key("360ChromeX")));
+            assert!(uses_owned_dock(&map_key(" 360ChromeX.EXE ")));
+            for process in ["chrome", "msedge", "deepseek harness", "360ChromeX-helper"] {
+                assert!(!uses_owned_dock(process));
+            }
         }
 
         #[test]
