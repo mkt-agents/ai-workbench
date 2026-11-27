@@ -2195,6 +2195,24 @@ export default function DesktopAppsPage() {
     </>
   );
 
+  const layoutToggle = (
+    <button
+      type="button"
+      className={`btn btn-secondary btn-small dapps-split-btn${splitView ? " is-on" : ""}`}
+      title={t(splitView ? "slot.single" : "slot.split")}
+      aria-label={t(splitView ? "slot.single" : "slot.split")}
+      aria-pressed={splitView}
+      disabled={layoutBusy}
+      onClick={() => {
+        const next = !splitView;
+        setSplitView(next);
+        saveSplitView(next);
+      }}
+    >
+      <Columns2 size={13} />
+    </button>
+  );
+
   const renderPaneHeader = (target: PaneTarget) => {
     const isActive = target === "active";
     const side = isActive ? activeSide : otherSide;
@@ -2204,8 +2222,11 @@ export default function DesktopAppsPage() {
     const state = isActive ? statusText : t(slotBBusy ? "status.locating" : `status.${panePhase}`);
     const chooseLabel = t(app ? "slot.change" : "slot.choose");
     return (
-      <div className="dapps-pane-header">
-        <span className="dapps-pane-side">{t(`slot.${side}`)}</span>
+      <div
+        className={`dapps-pane-header${isActive ? " is-active" : ""}`}
+        role="group"
+        aria-label={t(`slot.${side}`)}
+      >
         {app ? (
           <button
             type="button"
@@ -2257,6 +2278,27 @@ export default function DesktopAppsPage() {
           ) : null}
           {isActive ? appActions : null}
         </div>
+        {side === "right" ? (
+          <div className="dapps-layout-actions">
+            <button
+              type="button"
+              className="btn btn-secondary btn-small dapps-pane-icon-button"
+              disabled={!slotBApp || layoutBusy}
+              aria-label={t("slot.swap")}
+              title={t("slot.swap")}
+              onClick={() => {
+                flipActiveSide();
+                window.requestAnimationFrame(() => {
+                  paneSyncRef.current.active?.();
+                  paneSyncRef.current.other?.();
+                });
+              }}
+            >
+              <ArrowLeftRight size={14} />
+            </button>
+            {layoutToggle}
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -2313,10 +2355,55 @@ export default function DesktopAppsPage() {
     );
   })();
 
-  return (
-    <div className="dapps-page">
-      {/* One strip only: the hosted app's window paints over everything below,
-          so every control has to live in the reserved top band. */}
+  const showWindowWarning = phase === "attached" && Boolean(warning);
+  const toolbarNotices = (
+    <>
+      {showWindowWarning ? (
+        <span className="dapps-warn">
+          <AlertTriangle size={13} />
+          {t(`warn.${warning}`, { defaultValue: "" })}
+          {warning === "minimized" ||
+          warning === "maximized" ||
+          warning === "size-mismatch" ||
+          warning === "restore-failed" ? (
+            <button
+              type="button"
+              className="dapps-warn-fix is-emphasis"
+              disabled={busy}
+              onClick={() => void restoreWindow()}
+            >
+              {t("warn.restore")}
+            </button>
+          ) : null}
+          {/* The app undid our work (restored its own frame, hid the window,
+              clamped its size): one click re-runs the whole takeover. */}
+          {warning === "not-child" ||
+          warning === "invisible" ||
+          warning === "size" ||
+          warning === "restore-failed" ? (
+            <button
+              type="button"
+              className="dapps-warn-fix"
+              disabled={busy}
+              onClick={() => void reattach()}
+            >
+              {t("warn.reattach")}
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+
+      {storageWarn ? (
+        <span className="dapps-storage-warn" role="status">
+          <AlertTriangle size={12} />
+          {t("storage.warn")}
+        </span>
+      ) : null}
+    </>
+  );
+
+  const renderSingleToolbar = () => {
+    return (
       <div className="dapps-bar">
         <div className="dapps-tabs" role="tablist" aria-label={t("title")}>
           {apps.map((app) => {
@@ -2387,7 +2474,7 @@ export default function DesktopAppsPage() {
           </button>
         </div>
 
-        {!splitView ? <span
+        <span
           className={`dapps-status is-${phase}`}
           title={
             phase === "attached" && windowTitle
@@ -2402,92 +2489,37 @@ export default function DesktopAppsPage() {
             <span className="dapps-dot" />
           )}
           <span className="dapps-status-text">{statusText}</span>
-        </span> : null}
+        </span>
 
-        {phase === "attached" && warning ? (
-          <span className="dapps-warn">
-            <AlertTriangle size={13} />
-            {t(`warn.${warning}`, { defaultValue: "" })}
-            {warning === "minimized" ||
-            warning === "maximized" ||
-            warning === "size-mismatch" ||
-            warning === "restore-failed" ? (
-              <button
-                type="button"
-                className="dapps-warn-fix is-emphasis"
-                disabled={busy}
-                onClick={() => void restoreWindow()}
-              >
-                {t("warn.restore")}
-              </button>
-            ) : null}
-            {/* The app undid our work (restored its own frame, hid the window,
-                clamped its size): one click re-runs the whole takeover. */}
-            {warning === "not-child" ||
-            warning === "invisible" ||
-            warning === "size" ||
-            warning === "restore-failed" ? (
-              <button
-                type="button"
-                className="dapps-warn-fix"
-                disabled={busy}
-                onClick={() => void reattach()}
-              >
-                {t("warn.reattach")}
-              </button>
-            ) : null}
-          </span>
-        ) : null}
-
-        {storageWarn ? (
-          <span className="dapps-storage-warn" role="status">
-            <AlertTriangle size={12} />
-            {t("storage.warn")}
-          </span>
-        ) : null}
+        {toolbarNotices}
 
         <span className="dapps-spacer" />
 
         <div className="dapps-actions">
-          <button
-            type="button"
-            className={`btn btn-secondary btn-small dapps-split-btn${splitView ? " is-on" : ""}`}
-            title={splitView ? t("slot.single") : t("slot.split")}
-            aria-pressed={splitView}
-            disabled={layoutBusy}
-            onClick={() => {
-              const next = !splitView;
-              setSplitView(next);
-              saveSplitView(next);
-            }}
-          >
-            <Columns2 size={13} />
-          </button>
-          {splitView ? (
-            <button
-              type="button"
-              className="btn btn-secondary btn-small dapps-pane-icon-button"
-              disabled={!slotBApp || layoutBusy}
-              aria-label={t("slot.swap")}
-              title={t("slot.swap")}
-              onClick={() => {
-                flipActiveSide();
-                window.requestAnimationFrame(() => {
-                  paneSyncRef.current.active?.();
-                  paneSyncRef.current.other?.();
-                });
-              }}
-            >
-              <ArrowLeftRight size={14} />
-            </button>
-          ) : appActions}
+          {layoutToggle}
+          {appActions}
         </div>
       </div>
+    );
+  };
+
+  return (
+    <div className="dapps-page">
+      {splitView ? (
+        <>
+          <div className="dapps-split-bar">
+            {renderPaneHeader(activeSide === "left" ? "active" : "other")}
+            {renderPaneHeader(activeSide === "right" ? "active" : "other")}
+          </div>
+          {showWindowWarning || storageWarn ? (
+            <div className="dapps-bar">{toolbarNotices}</div>
+          ) : null}
+        </>
+      ) : renderSingleToolbar()}
 
       <div className="dapps-body">
         <div className={`dapps-slot-area${splitView ? ` is-split active-${activeSide}` : ""}`}>
           <section className="dapps-slot-wrap is-active-pane">
-            {splitView ? renderPaneHeader("active") : null}
           <div className="dapps-slot-content">
             <div className="dapps-slot" ref={slotRef} />
             {phase !== "attached" && (
@@ -2610,7 +2642,6 @@ export default function DesktopAppsPage() {
           </section>
           {splitView ? (
             <section className="dapps-slot-wrap">
-              {renderPaneHeader("other")}
               <div className="dapps-slot-content">
                 <div className="dapps-slot" ref={slotBRef} />
                 {slotBPanel}
