@@ -1,7 +1,6 @@
 /* Desktop app hosting page (AI 工作台 → 桌面应用).
    The hosted app draws its own native window over `.dapps-slot` and always
-   paints above the webview, so all chrome is compressed into the single
-   `.dapps-bar` strip at the top of one card. */
+   paints above the webview, so the toolbars sit above the hosted area. */
 
 .dapps-page {
   flex: 1;
@@ -194,7 +193,8 @@
 
 /* Same button scale as the Harness toolbar (22px tall, 11px label, 12px icon,
    pill) so the two host pages read as one chrome family. */
-.dapps-bar .btn {
+.dapps-bar .btn,
+.dapps-split-bar .btn {
   height: 22px;
   padding: 0 8px;
   gap: 4px;
@@ -202,7 +202,8 @@
   border-radius: var(--radius-full);
 }
 
-.dapps-bar .btn svg {
+.dapps-bar .btn svg,
+.dapps-split-bar .btn svg {
   width: 12px;
   height: 12px;
 }
@@ -245,11 +246,21 @@
   inset: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-2);
 }
 
-.dapps-slot-area.is-split {
+.dapps-slot-area.is-split,
+.dapps-split-bar {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-2);
+}
+
+.dapps-split-bar {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  flex: none;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .dapps-slot-area.active-right .is-active-pane {
@@ -265,7 +276,8 @@
 
 .dapps-slot-area.is-split .dapps-slot-wrap {
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 .dapps-slot-area.is-split .is-active-pane {
@@ -280,33 +292,17 @@
 
 .dapps-pane-header {
   container-type: inline-size;
-  position: relative;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  min-height: 36px;
+  min-width: 0;
+  min-height: 33px;
   padding: var(--space-1) var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--chrome-bg);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
-.is-active-pane > .dapps-pane-header {
-  background: var(--accent-dim);
-  border-bottom-color: var(--accent-border);
-}
-
-.dapps-pane-side {
-  flex: none;
-  padding-inline-end: var(--space-1);
-  color: var(--text-2);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.is-active-pane .dapps-pane-side {
-  color: var(--accent-strong);
+.dapps-pane-header.is-active {
+  background: var(--overlay-1);
+  box-shadow: inset 0 -1px var(--accent);
 }
 
 .dapps-pane-select {
@@ -319,13 +315,18 @@
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-0);
+  color: var(--text-1);
   text-align: start;
   cursor: pointer;
 }
 
 .dapps-pane-select[aria-pressed="true"] {
+  color: var(--text-0);
   cursor: default;
+}
+
+.dapps-pane-select .dapps-tab-icon {
+  flex: none;
 }
 
 .dapps-pane-select[aria-pressed="false"]:hover:not(:disabled) {
@@ -353,17 +354,35 @@
   font-size: 10px;
 }
 
-.dapps-pane-actions {
+.dapps-pane-actions,
+.dapps-layout-actions {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   flex: none;
 }
 
-.dapps-pane-icon-button {
+.dapps-layout-actions {
+  margin-inline-start: var(--space-1);
+  padding-inline-start: var(--space-2);
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.dapps-split-bar :is(.dapps-pane-icon-button, .dapps-split-btn, .dd > .btn) {
   width: 26px;
   padding-inline: 0;
   justify-content: center;
+}
+
+.dapps-split-bar .dapps-pane-header .btn-secondary:not(.is-on) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.dapps-split-bar .dapps-pane-header .btn-secondary:not(.is-on):hover:not(:disabled),
+.dapps-split-bar .dapps-pane-header .btn[aria-expanded="true"] {
+  background: var(--bg-hover);
 }
 
 @container (max-width: 365px) {
